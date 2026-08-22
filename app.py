@@ -18,7 +18,47 @@ DATA_DIR = os.environ.get("DATA_DIR", "/tmp")
 os.makedirs(DATA_DIR, exist_ok=True)
 
 DB_PATH = os.path.join(DATA_DIR, "xiaxia_sense.db")
+FRESHNESS_THRESHOLDS = {
+    "battery": 120,
+    "light": 60,
+    "barometer": 300,
+    "network": 120,
+    "location": 300,
+    "microphone": 30,
+    "pedometer": 300,
+    "activity": 60
+}
 
+DEFAULT_FRESHNESS_SECONDS = 300
+
+
+def freshness_info(sensor_name, updated_at):
+    try:
+        updated = datetime.fromisoformat(updated_at)
+
+        if updated.tzinfo is None:
+            updated = updated.replace(tzinfo=timezone.utc)
+
+        age_seconds = max(
+            0,
+            int((datetime.now(timezone.utc) - updated).total_seconds())
+        )
+
+        threshold = FRESHNESS_THRESHOLDS.get(
+            sensor_name,
+            DEFAULT_FRESHNESS_SECONDS
+        )
+
+        return {
+            "age_seconds": age_seconds,
+            "freshness": "fresh" if age_seconds <= threshold else "stale"
+        }
+
+    except Exception:
+        return {
+            "age_seconds": None,
+            "freshness": "unknown"
+        }
 
 # =========================
 # 数据库
