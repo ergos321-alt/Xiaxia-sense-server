@@ -21,7 +21,10 @@ SENSE_TOKEN = os.environ.get("SENSE_TOKEN", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/tmp")
 os.makedirs(DATA_DIR, exist_ok=True)
 
-DB_PATH = os.path.join(DATA_DIR, "xiaxia_sense.db")
+DB_PATH = os.path.join(
+    DATA_DIR,
+    "xiaxia_sense.db"
+)
 
 
 FRESHNESS_THRESHOLDS = {
@@ -37,18 +40,35 @@ FRESHNESS_THRESHOLDS = {
 
 DEFAULT_FRESHNESS_SECONDS = 300
 
+PHONE_ACTIVITY_FRESH_SECONDS = 120
+
 
 # =========================
 # 时间与新鲜度
 # =========================
 
 def utc_now_iso():
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(
+        timezone.utc
+    ).isoformat()
 
 
-def freshness_info(sensor_name, updated_at):
+def utc_now_epoch():
+    return int(
+        datetime.now(
+            timezone.utc
+        ).timestamp()
+    )
+
+
+def freshness_info(
+    sensor_name,
+    updated_at
+):
     try:
-        updated = datetime.fromisoformat(updated_at)
+        updated = datetime.fromisoformat(
+            updated_at
+        )
 
         if updated.tzinfo is None:
             updated = updated.replace(
@@ -59,15 +79,19 @@ def freshness_info(sensor_name, updated_at):
             0,
             int(
                 (
-                    datetime.now(timezone.utc)
+                    datetime.now(
+                        timezone.utc
+                    )
                     - updated
                 ).total_seconds()
             )
         )
 
-        threshold = FRESHNESS_THRESHOLDS.get(
-            sensor_name,
-            DEFAULT_FRESHNESS_SECONDS
+        threshold = (
+            FRESHNESS_THRESHOLDS.get(
+                sensor_name,
+                DEFAULT_FRESHNESS_SECONDS
+            )
         )
 
         return {
@@ -86,13 +110,62 @@ def freshness_info(sensor_name, updated_at):
         }
 
 
+def phone_freshness_info(
+    updated_at
+):
+    try:
+        updated = datetime.fromisoformat(
+            updated_at
+        )
+
+        if updated.tzinfo is None:
+            updated = updated.replace(
+                tzinfo=timezone.utc
+            )
+
+        age_seconds = max(
+            0,
+            int(
+                (
+                    datetime.now(
+                        timezone.utc
+                    )
+                    - updated
+                ).total_seconds()
+            )
+        )
+
+        return {
+            "age_seconds": age_seconds,
+            "freshness": (
+                "fresh"
+                if age_seconds
+                <= PHONE_ACTIVITY_FRESH_SECONDS
+                else "stale"
+            )
+        }
+
+    except Exception:
+        return {
+            "age_seconds": None,
+            "freshness": "unknown"
+        }
+
+
 # =========================
 # 数据库
 # =========================
 
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(
+        DB_PATH
+    )
+
     conn.row_factory = sqlite3.Row
+
+    # -------------------------
+    # SensorLogger 原始消息
+    # -------------------------
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS messages (
@@ -105,6 +178,10 @@ def get_db():
         )
     """)
 
+    # -------------------------
+    # SensorLogger 最新状态
+    # -------------------------
+
     conn.execute("""
         CREATE TABLE IF NOT EXISTS sensor_latest (
             sensor_name TEXT PRIMARY KEY,
@@ -114,6 +191,69 @@ def get_db():
             session_id TEXT,
             device_id TEXT,
             updated_at TEXT NOT NULL
+        )
+    """)
+
+    # -------------------------
+    # Phone Activity 最新状态
+    #
+    # 永远只保留 id = 1 一行。
+    # 用于回答：
+    # 手机现在是什么状态？
+    # -------------------------
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS phone_activity_latest (
+            id INTEGER PRIMARY KEY
+                CHECK (id = 1),
+
+            screen TEXT,
+            locked TEXT,
+
+            last_interaction INTEGER,
+
+            app_name TEXT,
+            app_package TEXT,
+            app_since INTEGER,
+
+            updated_at TEXT NOT NULL
+        )
+    """)
+
+    # -------------------------
+    # Phone Activity 事件历史
+    #
+    # 用于后续 timeline：
+    # screen_on
+    # screen_off
+    # unlock
+    # lock
+    # app_changed
+    # -------------------------
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS phone_activity_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            event_type TEXT NOT NULL,
+
+            screen TEXT,
+            locked TEXT,
+
+            app_name TEXT,
+            app_package TEXT,
+
+            event_time INTEGER NOT NULL,
+            received_at TEXT NOT NULL
+        )
+    """)
+
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS
+        idx_phone_activity_events_time
+
+        ON phone_activity_events (
+            event_time
         )
     """)
 
@@ -140,7 +280,9 @@ def check_token():
         ""
     )
 
-    if not auth.startswith("Bearer "):
+    if not auth.startswith(
+        "Bearer "
+    ):
         return jsonify({
             "error": "unauthorized"
         }), 401
@@ -156,10 +298,7 @@ def check_token():
 
 
 # =========================
-# Reality 数据读取公共函数
-#
-# 所有 Reality API 都从这里取得同一份
-# 当前现实，避免不同接口各写一套逻辑。
+# Sensor Reality 数据读取
 # =========================
 
 def load_latest_sensors():
@@ -171,7 +310,9 @@ def load_latest_sensors():
             sensor_time_ns,
             values_json,
             updated_at
+
         FROM sensor_latest
+
         ORDER BY sensor_name
     """).fetchall()
 
@@ -180,7 +321,9 @@ def load_latest_sensors():
     sensors = {}
 
     for row in rows:
-        sensor_name = row["sensor_name"]
+        sensor_name = (
+            row["sensor_name"]
+        )
 
         freshness = freshness_info(
             sensor_name,
@@ -196,41 +339,287 @@ def load_latest_sensors():
             values = {}
 
         sensors[sensor_name] = {
-            "time_ns": row["sensor_time_ns"],
+            "time_ns": (
+                row["sensor_time_ns"]
+            ),
             "values": values,
-            "updated_at": row["updated_at"],
+            "updated_at": (
+                row["updated_at"]
+            ),
             "age_seconds": (
-                freshness["age_seconds"]
+                freshness[
+                    "age_seconds"
+                ]
             ),
             "freshness": (
-                freshness["freshness"]
+                freshness[
+                    "freshness"
+                ]
             )
         }
 
     return sensors
 
 
+# =========================
+# Phone Activity 数据读取
+# =========================
+
+def load_phone_activity():
+    conn = get_db()
+
+    row = conn.execute("""
+        SELECT
+            screen,
+            locked,
+            last_interaction,
+            app_name,
+            app_package,
+            app_since,
+            updated_at
+
+        FROM phone_activity_latest
+
+        WHERE id = 1
+    """).fetchone()
+
+    conn.close()
+
+    if row is None:
+        return {}
+
+    freshness = (
+        phone_freshness_info(
+            row["updated_at"]
+        )
+    )
+
+    now_epoch = utc_now_epoch()
+
+    last_interaction = (
+        row["last_interaction"]
+    )
+
+    app_since = row["app_since"]
+
+    inactive_for_seconds = None
+    inactive_for_minutes = None
+
+    if isinstance(
+        last_interaction,
+        int
+    ):
+        inactive_for_seconds = max(
+            0,
+            now_epoch
+            - last_interaction
+        )
+
+        inactive_for_minutes = (
+            inactive_for_seconds
+            // 60
+        )
+
+    app_duration_seconds = None
+    app_duration_minutes = None
+
+    if isinstance(
+        app_since,
+        int
+    ):
+        app_duration_seconds = max(
+            0,
+            now_epoch
+            - app_since
+        )
+
+        app_duration_minutes = (
+            app_duration_seconds
+            // 60
+        )
+
+    locked_value = row["locked"]
+
+    if locked_value == "true":
+        locked = True
+
+    elif locked_value == "false":
+        locked = False
+
+    else:
+        locked = None
+
+    return {
+        "screen": row["screen"],
+        "locked": locked,
+
+        "last_interaction": (
+            last_interaction
+        ),
+
+        "inactive_for_seconds": (
+            inactive_for_seconds
+        ),
+
+        "inactive_for_minutes": (
+            inactive_for_minutes
+        ),
+
+        "app_name": (
+            row["app_name"]
+        ),
+
+        "app_package": (
+            row["app_package"]
+        ),
+
+        "app_since": app_since,
+
+        "app_duration_seconds": (
+            app_duration_seconds
+        ),
+
+        "app_duration_minutes": (
+            app_duration_minutes
+        ),
+
+        "updated_at": (
+            row["updated_at"]
+        ),
+
+        "age_seconds": (
+            freshness[
+                "age_seconds"
+            ]
+        ),
+
+        "freshness": (
+            freshness[
+                "freshness"
+            ]
+        )
+    }
+
+
+def load_recent_phone_events(
+    minutes=60,
+    limit=50
+):
+    now_epoch = utc_now_epoch()
+
+    cutoff = (
+        now_epoch
+        - minutes * 60
+    )
+
+    conn = get_db()
+
+    rows = conn.execute("""
+        SELECT
+            event_type,
+            screen,
+            locked,
+            app_name,
+            app_package,
+            event_time,
+            received_at
+
+        FROM phone_activity_events
+
+        WHERE event_time >= ?
+
+        ORDER BY event_time DESC
+
+        LIMIT ?
+    """, (
+        cutoff,
+        limit
+    )).fetchall()
+
+    conn.close()
+
+    events = []
+
+    for row in rows:
+        locked_value = (
+            row["locked"]
+        )
+
+        if locked_value == "true":
+            locked = True
+
+        elif locked_value == "false":
+            locked = False
+
+        else:
+            locked = None
+
+        events.append({
+            "event_type": (
+                row["event_type"]
+            ),
+            "screen": (
+                row["screen"]
+            ),
+            "locked": locked,
+            "app_name": (
+                row["app_name"]
+            ),
+            "app_package": (
+                row["app_package"]
+            ),
+            "event_time": (
+                row["event_time"]
+            ),
+            "received_at": (
+                row["received_at"]
+            )
+        })
+
+    return events
+
+
+# =========================
+# 当前完整上下文
+#
+# 所有 Reality API 尽量从这里
+# 获取同一份当前现实。
+# =========================
+
 def build_current_context():
     sensors = load_latest_sensors()
 
-    semantic = build_semantic_context(
-        sensors
+    semantic = (
+        build_semantic_context(
+            sensors
+        )
     )
 
-    weather = build_weather_context(
-        semantic
+    weather = (
+        build_weather_context(
+            semantic
+        )
     )
 
-    reality = build_reality_context(
-        semantic,
-        weather
+    reality = (
+        build_reality_context(
+            semantic,
+            weather
+        )
+    )
+
+    phone_activity = (
+        load_phone_activity()
     )
 
     return {
         "sensors": sensors,
         "semantic": semantic,
         "weather": weather,
-        "reality": reality
+        "reality": reality,
+        "phone_activity": (
+            phone_activity
+        )
     }
 
 
@@ -242,12 +631,19 @@ def build_current_context():
 # 不返回任何用户现实数据。
 # =========================
 
-@app.route("/ping", methods=["GET"])
+@app.route(
+    "/ping",
+    methods=["GET"]
+)
 def ping():
     return jsonify({
         "status": "ok",
-        "service": "xiaxia-sense-server",
-        "generated_at": utc_now_iso()
+        "service": (
+            "xiaxia-sense-server"
+        ),
+        "generated_at": (
+            utc_now_iso()
+        )
     })
 
 
@@ -255,7 +651,10 @@ def ping():
 # SensorLogger 数据入口
 # =========================
 
-@app.route("/data", methods=["POST"])
+@app.route(
+    "/data",
+    methods=["POST"]
+)
 def receive_data():
     auth_error = check_token()
 
@@ -266,20 +665,34 @@ def receive_data():
         silent=True
     )
 
-    if not isinstance(data, dict):
+    if not isinstance(
+        data,
+        dict
+    ):
         return jsonify({
             "error": "invalid_json"
         }), 400
 
-    message_id = data.get("messageId")
-    session_id = data.get("sessionId")
-    device_id = data.get("deviceId")
+    message_id = data.get(
+        "messageId"
+    )
+
+    session_id = data.get(
+        "sessionId"
+    )
+
+    device_id = data.get(
+        "deviceId"
+    )
+
     payload = data.get(
         "payload",
         []
     )
 
-    received_at = utc_now_iso()
+    received_at = (
+        utc_now_iso()
+    )
 
     conn = get_db()
 
@@ -291,6 +704,7 @@ def receive_data():
             received_at,
             raw_json
         )
+
         VALUES (?, ?, ?, ?, ?)
     """, (
         message_id,
@@ -305,7 +719,10 @@ def receive_data():
 
     updated_sensors = []
 
-    if isinstance(payload, list):
+    if isinstance(
+        payload,
+        list
+    ):
         for reading in payload:
 
             if not isinstance(
@@ -314,12 +731,16 @@ def receive_data():
             ):
                 continue
 
-            sensor_name = reading.get(
-                "name"
+            sensor_name = (
+                reading.get(
+                    "name"
+                )
             )
 
-            sensor_time_ns = reading.get(
-                "time"
+            sensor_time_ns = (
+                reading.get(
+                    "time"
+                )
             )
 
             values = reading.get(
@@ -338,7 +759,9 @@ def receive_data():
 
             old = conn.execute("""
                 SELECT sensor_time_ns
+
                 FROM sensor_latest
+
                 WHERE sensor_name = ?
             """, (
                 sensor_name,
@@ -347,7 +770,9 @@ def receive_data():
             if (
                 old is None
                 or sensor_time_ns
-                > old["sensor_time_ns"]
+                > old[
+                    "sensor_time_ns"
+                ]
             ):
                 conn.execute("""
                     INSERT INTO sensor_latest (
@@ -359,20 +784,29 @@ def receive_data():
                         device_id,
                         updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+
+                    VALUES (
+                        ?, ?, ?, ?, ?, ?, ?
+                    )
 
                     ON CONFLICT(sensor_name)
+
                     DO UPDATE SET
                         sensor_time_ns =
                             excluded.sensor_time_ns,
+
                         values_json =
                             excluded.values_json,
+
                         message_id =
                             excluded.message_id,
+
                         session_id =
                             excluded.session_id,
+
                         device_id =
                             excluded.device_id,
+
                         updated_at =
                             excluded.updated_at
                 """, (
@@ -397,13 +831,301 @@ def receive_data():
 
     return jsonify({
         "status": "ok",
+
         "received": (
             len(payload)
-            if isinstance(payload, list)
+            if isinstance(
+                payload,
+                list
+            )
             else 0
         ),
+
         "updated_sensors": (
             updated_sensors
+        )
+    }), 200
+
+
+# =========================
+# Tasker Phone Activity
+# 数据入口
+#
+# Tasker 将手机状态发送到：
+#
+# POST /phone/activity
+# =========================
+
+@app.route(
+    "/phone/activity",
+    methods=["POST"]
+)
+def receive_phone_activity():
+    auth_error = check_token()
+
+    if auth_error:
+        return auth_error
+
+    data = request.get_json(
+        silent=True
+    )
+
+    if not isinstance(
+        data,
+        dict
+    ):
+        return jsonify({
+            "error": "invalid_json"
+        }), 400
+
+    screen = data.get(
+        "screen"
+    )
+
+    locked = data.get(
+        "locked"
+    )
+
+    last_interaction = (
+        data.get(
+            "last_interaction"
+        )
+    )
+
+    app_name = data.get(
+        "app_name"
+    )
+
+    app_package = data.get(
+        "app_package"
+    )
+
+    app_since = data.get(
+        "app_since"
+    )
+
+    # -------------------------
+    # 基础字段规范化
+    # -------------------------
+
+    if screen not in (
+        "on",
+        "off"
+    ):
+        screen = None
+
+    if isinstance(
+        locked,
+        bool
+    ):
+        locked = (
+            "true"
+            if locked
+            else "false"
+        )
+
+    elif isinstance(
+        locked,
+        str
+    ):
+        locked = (
+            locked
+            .strip()
+            .lower()
+        )
+
+        if locked not in (
+            "true",
+            "false"
+        ):
+            locked = None
+
+    else:
+        locked = None
+
+    try:
+        last_interaction = int(
+            last_interaction
+        )
+
+    except Exception:
+        last_interaction = None
+
+    try:
+        app_since = int(
+            app_since
+        )
+
+    except Exception:
+        app_since = None
+
+    received_at = (
+        utc_now_iso()
+    )
+
+    event_time = (
+        utc_now_epoch()
+    )
+
+    conn = get_db()
+
+    old = conn.execute("""
+        SELECT
+            screen,
+            locked,
+            last_interaction,
+            app_name,
+            app_package,
+            app_since
+
+        FROM phone_activity_latest
+
+        WHERE id = 1
+    """).fetchone()
+
+    # -------------------------
+    # 判断这次变化是什么事件
+    #
+    # 服务器只做事实层判断。
+    # 不判断用户是否睡着、
+    # 是否工作、是否偷懒等。
+    # -------------------------
+
+    event_type = "update"
+
+    if old is None:
+        event_type = "initial"
+
+    elif (
+        old["screen"]
+        != screen
+    ):
+        if screen == "on":
+            event_type = "screen_on"
+
+        elif screen == "off":
+            event_type = "screen_off"
+
+    elif (
+        old["locked"]
+        != locked
+    ):
+        if locked == "false":
+            event_type = "unlock"
+
+        elif locked == "true":
+            event_type = "lock"
+
+    elif (
+        old["app_package"]
+        != app_package
+    ):
+        event_type = "app_changed"
+
+    elif (
+        old["last_interaction"]
+        != last_interaction
+    ):
+        event_type = "interaction"
+
+    # -------------------------
+    # 保存当前最新状态
+    # -------------------------
+
+    conn.execute("""
+        INSERT INTO
+        phone_activity_latest (
+            id,
+            screen,
+            locked,
+            last_interaction,
+            app_name,
+            app_package,
+            app_since,
+            updated_at
+        )
+
+        VALUES (
+            1,
+            ?, ?, ?, ?, ?, ?, ?
+        )
+
+        ON CONFLICT(id)
+
+        DO UPDATE SET
+            screen =
+                excluded.screen,
+
+            locked =
+                excluded.locked,
+
+            last_interaction =
+                excluded.last_interaction,
+
+            app_name =
+                excluded.app_name,
+
+            app_package =
+                excluded.app_package,
+
+            app_since =
+                excluded.app_since,
+
+            updated_at =
+                excluded.updated_at
+    """, (
+        screen,
+        locked,
+        last_interaction,
+        app_name,
+        app_package,
+        app_since,
+        received_at
+    ))
+
+    # -------------------------
+    # 保存历史事件
+    #
+    # update 类型不写入历史，
+    # 避免 timeline 被重复快照淹没。
+    # -------------------------
+
+    if event_type != "update":
+        conn.execute("""
+            INSERT INTO
+            phone_activity_events (
+                event_type,
+                screen,
+                locked,
+                app_name,
+                app_package,
+                event_time,
+                received_at
+            )
+
+            VALUES (
+                ?, ?, ?, ?, ?, ?, ?
+            )
+        """, (
+            event_type,
+            screen,
+            locked,
+            app_name,
+            app_package,
+            event_time,
+            received_at
+        ))
+
+    conn.commit()
+    conn.close()
+
+    return jsonify({
+        "status": "ok",
+        "event_type": (
+            event_type
+        ),
+        "received_at": (
+            received_at
         )
     }), 200
 
@@ -412,34 +1134,53 @@ def receive_data():
 # 旧版完整调试上下文
 #
 # 保留。
-# 主要供工程检查使用。
 #
-# 它返回：
-# sensors
-# semantic
-# weather
-# reality
-#
-# Custom GPT 正式 Action
-# 优先使用 /reality/* 接口。
+# 现在额外增加：
+# phone_activity
 # =========================
 
-@app.route("/context", methods=["GET"])
+@app.route(
+    "/context",
+    methods=["GET"]
+)
 def context():
     auth_error = check_token()
 
     if auth_error:
         return auth_error
 
-    current = build_current_context()
+    current = (
+        build_current_context()
+    )
 
     return jsonify({
         "status": "ok",
-        "generated_at": utc_now_iso(),
-        "sensors": current["sensors"],
-        "semantic": current["semantic"],
-        "weather": current["weather"],
-        "reality": current["reality"]
+
+        "generated_at": (
+            utc_now_iso()
+        ),
+
+        "sensors": (
+            current["sensors"]
+        ),
+
+        "semantic": (
+            current["semantic"]
+        ),
+
+        "weather": (
+            current["weather"]
+        ),
+
+        "reality": (
+            current["reality"]
+        ),
+
+        "phone_activity": (
+            current[
+                "phone_activity"
+            ]
+        )
     })
 
 
@@ -451,9 +1192,12 @@ def context():
 # =========================
 # 1. 完整现实上下文
 #
-# 给夏夏获取当前完整 Reality。
-# 不返回原始 SensorLogger 数据，
-# 避免把工程噪音直接塞给模型。
+# 现在同时返回：
+# reality
+# phone_activity
+#
+# Phone Activity 仍保持模块化，
+# 不强行塞进 reality.py。
 # =========================
 
 @app.route(
@@ -466,23 +1210,31 @@ def reality_context():
     if auth_error:
         return auth_error
 
-    current = build_current_context()
+    current = (
+        build_current_context()
+    )
 
     return jsonify({
         "status": "ok",
-        "generated_at": utc_now_iso(),
-        "reality": current["reality"]
+
+        "generated_at": (
+            utc_now_iso()
+        ),
+
+        "reality": (
+            current["reality"]
+        ),
+
+        "phone_activity": (
+            current[
+                "phone_activity"
+            ]
+        )
     })
 
 
 # =========================
 # 2. Reality 摘要
-#
-# 用于大多数日常场景。
-#
-# 返回：
-# deterministic summary
-# conservative inferences
 # =========================
 
 @app.route(
@@ -495,30 +1247,39 @@ def reality_summary():
     if auth_error:
         return auth_error
 
-    current = build_current_context()
+    current = (
+        build_current_context()
+    )
 
-    reality = current["reality"]
+    reality = current[
+        "reality"
+    ]
 
     return jsonify({
         "status": "ok",
-        "generated_at": utc_now_iso(),
-        "summary": reality.get(
-            "summary",
-            {}
+
+        "generated_at": (
+            utc_now_iso()
         ),
-        "inferences": reality.get(
-            "inferences",
-            {}
+
+        "summary": (
+            reality.get(
+                "summary",
+                {}
+            )
+        ),
+
+        "inferences": (
+            reality.get(
+                "inferences",
+                {}
+            )
         )
     })
 
 
 # =========================
 # 3. 环境现实
-#
-# 适用于：
-# 天气、温度、雨、风、
-# 光线、声音、气压等问题。
 # =========================
 
 @app.route(
@@ -531,9 +1292,13 @@ def reality_environment():
     if auth_error:
         return auth_error
 
-    current = build_current_context()
+    current = (
+        build_current_context()
+    )
 
-    reality = current["reality"]
+    reality = current[
+        "reality"
+    ]
 
     summary = reality.get(
         "summary",
@@ -552,31 +1317,44 @@ def reality_environment():
     ]
 
     for key in summary_keys:
-        value = summary.get(key)
+        value = summary.get(
+            key
+        )
 
         if value is not None:
-            relevant_summary[key] = value
+            relevant_summary[
+                key
+            ] = value
 
     return jsonify({
         "status": "ok",
-        "generated_at": utc_now_iso(),
-        "environment": reality.get(
-            "environment",
-            {}
+
+        "generated_at": (
+            utc_now_iso()
         ),
-        "weather": reality.get(
-            "weather",
-            {}
+
+        "environment": (
+            reality.get(
+                "environment",
+                {}
+            )
         ),
-        "summary": relevant_summary
+
+        "weather": (
+            reality.get(
+                "weather",
+                {}
+            )
+        ),
+
+        "summary": (
+            relevant_summary
+        )
     })
 
 
 # =========================
 # 4. 设备现实
-#
-# 适用于：
-# 电池、充电、网络状态。
 # =========================
 
 @app.route(
@@ -589,9 +1367,13 @@ def reality_device():
     if auth_error:
         return auth_error
 
-    current = build_current_context()
+    current = (
+        build_current_context()
+    )
 
-    reality = current["reality"]
+    reality = current[
+        "reality"
+    ]
 
     summary = reality.get(
         "summary",
@@ -608,34 +1390,44 @@ def reality_device():
     ]
 
     for key in summary_keys:
-        value = summary.get(key)
+        value = summary.get(
+            key
+        )
 
         if value is not None:
-            relevant_summary[key] = value
+            relevant_summary[
+                key
+            ] = value
 
     return jsonify({
         "status": "ok",
-        "generated_at": utc_now_iso(),
-        "device": reality.get(
-            "device",
-            {}
+
+        "generated_at": (
+            utc_now_iso()
         ),
-        "network": reality.get(
-            "network",
-            {}
+
+        "device": (
+            reality.get(
+                "device",
+                {}
+            )
         ),
-        "summary": relevant_summary
+
+        "network": (
+            reality.get(
+                "network",
+                {}
+            )
+        ),
+
+        "summary": (
+            relevant_summary
+        )
     })
 
 
 # =========================
 # 5. 位置现实
-#
-# 返回位置事实及位置质量。
-#
-# 注意：
-# API 不自行解释具体地点名称，
-# 这里只提供 Reality 已经确认的事实。
 # =========================
 
 @app.route(
@@ -648,9 +1440,13 @@ def reality_location():
     if auth_error:
         return auth_error
 
-    current = build_current_context()
+    current = (
+        build_current_context()
+    )
 
-    reality = current["reality"]
+    reality = current[
+        "reality"
+    ]
 
     summary = reality.get(
         "summary",
@@ -659,17 +1455,30 @@ def reality_location():
 
     return jsonify({
         "status": "ok",
-        "generated_at": utc_now_iso(),
-        "location": reality.get(
-            "location",
-            {}
+
+        "generated_at": (
+            utc_now_iso()
         ),
-        "location_quality": summary.get(
-            "location_quality"
+
+        "location": (
+            reality.get(
+                "location",
+                {}
+            )
         ),
-        "mobility": summary.get(
-            "mobility"
+
+        "location_quality": (
+            summary.get(
+                "location_quality"
+            )
         ),
+
+        "mobility": (
+            summary.get(
+                "mobility"
+            )
+        ),
+
         "mobility_description": (
             summary.get(
                 "mobility_description"
@@ -679,13 +1488,121 @@ def reality_location():
 
 
 # =========================
-# 6. 感知系统状态
+# 6. Phone Activity Reality
 #
-# 让夏夏知道自己的“眼睛”
-# 是否正在收到新数据。
+# 给夏夏读取当前手机状态。
 #
-# 不返回传感器真实值。
-# 只返回新鲜度与更新时间。
+# 事实层：
+# screen
+# locked
+# last interaction
+# current app
+# duration
+# freshness
+#
+# 不判断：
+# 是否睡觉
+# 是否偷懒
+# 是否工作
+# =========================
+
+@app.route(
+    "/reality/phone",
+    methods=["GET"]
+)
+def reality_phone():
+    auth_error = check_token()
+
+    if auth_error:
+        return auth_error
+
+    phone_activity = (
+        load_phone_activity()
+    )
+
+    return jsonify({
+        "status": "ok",
+
+        "generated_at": (
+            utc_now_iso()
+        ),
+
+        "phone_activity": (
+            phone_activity
+        )
+    })
+
+
+# =========================
+# 7. Phone Activity Timeline
+#
+# 默认返回最近 60 分钟。
+#
+# 可使用：
+# ?minutes=30
+# ?minutes=60
+# ?minutes=120
+# =========================
+
+@app.route(
+    "/reality/phone/timeline",
+    methods=["GET"]
+)
+def reality_phone_timeline():
+    auth_error = check_token()
+
+    if auth_error:
+        return auth_error
+
+    try:
+        minutes = int(
+            request.args.get(
+                "minutes",
+                60
+            )
+        )
+
+    except Exception:
+        minutes = 60
+
+    minutes = max(
+        1,
+        min(
+            minutes,
+            1440
+        )
+    )
+
+    events = (
+        load_recent_phone_events(
+            minutes=minutes,
+            limit=100
+        )
+    )
+
+    return jsonify({
+        "status": "ok",
+
+        "generated_at": (
+            utc_now_iso()
+        ),
+
+        "window_minutes": (
+            minutes
+        ),
+
+        "event_count": (
+            len(events)
+        ),
+
+        "events": events
+    })
+
+
+# =========================
+# 8. 感知系统状态
+#
+# 保留原 Sensor 状态接口。
 # =========================
 
 @app.route(
@@ -698,7 +1615,9 @@ def reality_status():
     if auth_error:
         return auth_error
 
-    sensors = load_latest_sensors()
+    sensors = (
+        load_latest_sensors()
+    )
 
     sensor_status = {}
 
@@ -708,7 +1627,11 @@ def reality_status():
 
     newest_update = None
 
-    for sensor_name, sensor in sensors.items():
+    for (
+        sensor_name,
+        sensor
+    ) in sensors.items():
+
         freshness = sensor.get(
             "freshness",
             "unknown"
@@ -722,10 +1645,18 @@ def reality_status():
             "updated_at"
         )
 
-        sensor_status[sensor_name] = {
-            "freshness": freshness,
-            "age_seconds": age_seconds,
-            "updated_at": updated_at
+        sensor_status[
+            sensor_name
+        ] = {
+            "freshness": (
+                freshness
+            ),
+            "age_seconds": (
+                age_seconds
+            ),
+            "updated_at": (
+                updated_at
+            )
         }
 
         if freshness == "fresh":
@@ -740,41 +1671,108 @@ def reality_status():
         if updated_at:
             if (
                 newest_update is None
-                or updated_at > newest_update
+                or updated_at
+                > newest_update
             ):
-                newest_update = updated_at
+                newest_update = (
+                    updated_at
+                )
 
     if not sensors:
         overall_sensor_state = (
             "no_sensor_data"
         )
 
-    elif fresh_count == len(sensors):
-        overall_sensor_state = "fresh"
+    elif (
+        fresh_count
+        == len(sensors)
+    ):
+        overall_sensor_state = (
+            "fresh"
+        )
 
     elif fresh_count > 0:
-        overall_sensor_state = "partial"
+        overall_sensor_state = (
+            "partial"
+        )
 
     else:
-        overall_sensor_state = "stale"
+        overall_sensor_state = (
+            "stale"
+        )
+
+    phone_activity = (
+        load_phone_activity()
+    )
 
     return jsonify({
         "status": "ok",
-        "service": "xiaxia-sense-server",
-        "generated_at": utc_now_iso(),
+
+        "service": (
+            "xiaxia-sense-server"
+        ),
+
+        "generated_at": (
+            utc_now_iso()
+        ),
+
         "sensor_state": (
             overall_sensor_state
         ),
-        "sensor_count": len(sensors),
-        "fresh_sensor_count": fresh_count,
-        "stale_sensor_count": stale_count,
+
+        "sensor_count": (
+            len(sensors)
+        ),
+
+        "fresh_sensor_count": (
+            fresh_count
+        ),
+
+        "stale_sensor_count": (
+            stale_count
+        ),
+
         "unknown_sensor_count": (
             unknown_count
         ),
+
         "latest_sensor_update": (
             newest_update
         ),
-        "sensors": sensor_status
+
+        "sensors": (
+            sensor_status
+        ),
+
+        "phone_activity_status": {
+            "available": bool(
+                phone_activity
+            ),
+
+            "freshness": (
+                phone_activity.get(
+                    "freshness"
+                )
+                if phone_activity
+                else "unknown"
+            ),
+
+            "age_seconds": (
+                phone_activity.get(
+                    "age_seconds"
+                )
+                if phone_activity
+                else None
+            ),
+
+            "updated_at": (
+                phone_activity.get(
+                    "updated_at"
+                )
+                if phone_activity
+                else None
+            )
+        }
     })
 
 
@@ -782,8 +1780,7 @@ def reality_status():
 # 浏览器人工检查页面
 #
 # 保留原来的手工检查方式。
-# 这里允许通过网页表单输入 token，
-# 不用于 Custom GPT Action。
+# 现在也会显示 Phone Activity。
 # =========================
 
 @app.route(
@@ -795,8 +1792,10 @@ def context_check():
         return """
         <!doctype html>
         <html>
+
         <head>
             <meta charset="utf-8">
+
             <title>
                 Xiaxia Sense Context Check
             </title>
@@ -814,7 +1813,8 @@ def context_check():
 
             <p>
                 Enter SENSE_TOKEN to inspect
-                the latest sensor data.
+                the latest sensor and
+                phone activity data.
             </p>
 
             <form method="post">
@@ -861,15 +1861,38 @@ def context_check():
             "error": "unauthorized"
         }), 401
 
-    current = build_current_context()
+    current = (
+        build_current_context()
+    )
 
     return jsonify({
         "status": "ok",
-        "generated_at": utc_now_iso(),
-        "sensors": current["sensors"],
-        "semantic": current["semantic"],
-        "weather": current["weather"],
-        "reality": current["reality"]
+
+        "generated_at": (
+            utc_now_iso()
+        ),
+
+        "sensors": (
+            current["sensors"]
+        ),
+
+        "semantic": (
+            current["semantic"]
+        ),
+
+        "weather": (
+            current["weather"]
+        ),
+
+        "reality": (
+            current["reality"]
+        ),
+
+        "phone_activity": (
+            current[
+                "phone_activity"
+            ]
+        )
     })
 
 
