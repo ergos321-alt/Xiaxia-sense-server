@@ -301,7 +301,7 @@ def build_reality_context(semantic, weather):
     # =========================
     # 人类可理解的现实描述
     #
-    # 这一部分只翻译已经确定的事实/摘要。
+    # 这里只翻译已经确定的事实/摘要。
     # 不生成对用户行为、情绪或意图的猜测。
     # =========================
 
@@ -374,7 +374,9 @@ def build_reality_context(semantic, weather):
             "weather_description"
         ] = weather_description
 
-        descriptions.append(weather_description.rstrip("。"))
+        descriptions.append(
+            weather_description.rstrip("。")
+        )
 
     # ---------- 周围环境描述 ----------
 
@@ -529,10 +531,18 @@ def build_reality_context(semantic, weather):
     # =========================
     # 保守情境推断
     #
-    # 注意：
     # inference 不是事实。
-    # 只有多个独立信号互相支持时才生成。
+    # 多个可能情境可以同时成立，因此使用 contexts 数组。
+    #
+    # Reality 只描述：
+    # “这些信号可能指向什么环境”
+    #
+    # 不描述：
+    # “用户正在想什么”
+    # “用户需要什么”
     # =========================
+
+    inference_contexts = []
 
     mobility = reality["summary"].get("mobility")
     ambient_light = reality["summary"].get(
@@ -541,15 +551,33 @@ def build_reality_context(semantic, weather):
     ambient_sound = reality["summary"].get(
         "ambient_sound"
     )
+    thermal_feel = reality["summary"].get(
+        "thermal_feel"
+    )
+    precipitation = reality["summary"].get(
+        "precipitation"
+    )
 
-    # 静止 + 黑暗 + 安静
-    # 可能处于休息环境，但不能推断“正在睡觉”
+    # ---------- 可能的休息环境 ----------
+    #
+    # 静止 + 暗光 + 安静
+    #
+    # 不推断“正在睡觉”。
+    # 也不直接断言一定在室内。
+    # ----------
+
     if (
         mobility == "not_moving"
-        and ambient_light in ("dark", "dim")
-        and ambient_sound in ("very_quiet", "quiet")
+        and ambient_light in (
+            "dark",
+            "dim"
+        )
+        and ambient_sound in (
+            "very_quiet",
+            "quiet"
+        )
     ):
-        reality["inferences"]["possible_context"] = {
+        inference_contexts.append({
             "value": "resting_environment",
             "confidence": "medium",
             "basis": [
@@ -557,30 +585,77 @@ def build_reality_context(semantic, weather):
                 ambient_light,
                 ambient_sound
             ]
-        }
+        })
 
-    # 明亮 + 较吵 + 静止
-    # 可能处于活跃的公共/工作环境
-    elif (
-        mobility == "not_moving"
-        and ambient_light in (
-            "bright",
-            "very_bright"
+    # ---------- 可能的移动环境 ----------
+    #
+    # Activity 显示持续移动，
+    # 且当前位置数据可用。
+    #
+    # GPS 可用不能证明用户一定在户外，
+    # 因此这里只推断 moving_environment。
+    # ----------
+
+    location_data = reality.get("location", {})
+
+    if (
+        mobility in (
+            "moving_on_foot",
+            "moving_on_foot_fast",
+            "cycling",
+            "in_vehicle"
         )
-        and ambient_sound in (
-            "moderate",
-            "loud"
-        )
+        and location_data.get("available") is True
     ):
-        reality["inferences"]["possible_context"] = {
-            "value": "active_environment",
-            "confidence": "low",
+        inference_contexts.append({
+            "value": "moving_environment",
+            "confidence": "medium",
             "basis": [
-                "not_moving",
-                ambient_light,
-                ambient_sound
+                mobility,
+                "location_available"
             ]
-        }
+        })
+
+    # ---------- 炎热环境 ----------
+    #
+    # 这是基于天气体感数据的环境判断。
+    # ----------
+
+    if thermal_feel in (
+        "very_hot",
+        "extremely_hot"
+    ):
+        inference_contexts.append({
+            "value": "hot_environment",
+            "confidence": "high",
+            "basis": [
+                thermal_feel
+            ]
+        })
+
+    # ---------- 雨天环境 ----------
+    #
+    # 基于天气服务确认的降水状态。
+    # ----------
+
+    if precipitation in (
+        "light_rain",
+        "rain",
+        "heavy_rain"
+    ):
+        inference_contexts.append({
+            "value": "rainy_environment",
+            "confidence": "high",
+            "basis": [
+                precipitation
+            ]
+        })
+
+    # 只有真的存在推断时才输出 contexts。
+    if inference_contexts:
+        reality["inferences"]["contexts"] = (
+            inference_contexts
+        )
 
     # =========================
     # 数据质量提示
