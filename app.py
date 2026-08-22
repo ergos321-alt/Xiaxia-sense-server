@@ -283,11 +283,16 @@ def context():
     sensors = {}
 
     for row in rows:
-        sensors[row["sensor_name"]] = {
-            "time_ns": row["sensor_time_ns"],
-            "values": json.loads(row["values_json"]),
-            "updated_at": row["updated_at"]
-        }
+    sensor_name = row["sensor_name"]
+    freshness = freshness_info(sensor_name, row["updated_at"])
+
+    sensors[sensor_name] = {
+        "time_ns": row["sensor_time_ns"],
+        "values": json.loads(row["values_json"]),
+        "updated_at": row["updated_at"],
+        "age_seconds": freshness["age_seconds"],
+        "freshness": freshness["freshness"]
+    }
 
     return jsonify({
         "status": "ok",
