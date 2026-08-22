@@ -4,6 +4,7 @@ import sqlite3
 from datetime import datetime, timezone
 
 from flask import Flask, request, jsonify
+from semantic import build_semantic_context
 
 
 app = Flask(__name__)
@@ -299,9 +300,12 @@ def context():
             "freshness": freshness["freshness"]
         }
 
+    semantic = build_semantic_context(sensors)
+
     return jsonify({
         "status": "ok",
-        "sensors": sensors
+        "sensors": sensors,
+        "semantic": semantic
     })
 
 
@@ -378,9 +382,12 @@ def context_check():
             "freshness": freshness["freshness"]
         }
 
+    semantic = build_semantic_context(sensors)
+
     return jsonify({
         "status": "ok",
-        "sensors": sensors
+        "sensors": sensors,
+        "semantic": semantic
     })
 
 
