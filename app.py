@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from flask import Flask, request, jsonify
 from semantic import build_semantic_context
 from weather import build_weather_context
-
+from reality import build_reality_context
 
 app = Flask(__name__)
 
@@ -307,11 +307,17 @@ def context():
         semantic
     )
 
+    reality = build_reality_context(
+        semantic,
+        weather
+    )
+    
     return jsonify({
         "status": "ok",
         "sensors": sensors,
         "semantic": semantic,
-        "weather": weather
+        "weather": weather,
+        "reality": reality
     })
 
 
@@ -422,11 +428,17 @@ def context_check():
         semantic
     )
 
+    reality = build_reality_context(
+        semantic,
+        weather
+    )
+
     return jsonify({
         "status": "ok",
         "sensors": sensors,
         "semantic": semantic,
-        "weather": weather
+        "weather": weather,
+        "reality": reality
     })
 
 
