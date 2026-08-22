@@ -44,7 +44,7 @@ PHONE_ACTIVITY_FRESH_SECONDS = 120
 
 
 # =========================
-# 时间与新鲜度
+# 时间工具
 # =========================
 
 def utc_now_iso():
@@ -60,6 +60,27 @@ def utc_now_epoch():
         ).timestamp()
     )
 
+
+def epoch_to_iso(epoch_value):
+    if not isinstance(
+        epoch_value,
+        int
+    ):
+        return None
+
+    try:
+        return datetime.fromtimestamp(
+            epoch_value,
+            tz=timezone.utc
+        ).isoformat()
+
+    except Exception:
+        return None
+
+
+# =========================
+# 新鲜度
+# =========================
 
 def freshness_info(
     sensor_name,
@@ -163,10 +184,6 @@ def get_db():
 
     conn.row_factory = sqlite3.Row
 
-    # -------------------------
-    # SensorLogger 原始消息
-    # -------------------------
-
     conn.execute("""
         CREATE TABLE IF NOT EXISTS messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -177,10 +194,6 @@ def get_db():
             raw_json TEXT NOT NULL
         )
     """)
-
-    # -------------------------
-    # SensorLogger 最新状态
-    # -------------------------
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS sensor_latest (
@@ -193,14 +206,6 @@ def get_db():
             updated_at TEXT NOT NULL
         )
     """)
-
-    # -------------------------
-    # Phone Activity 最新状态
-    #
-    # 永远只保留 id = 1 一行。
-    # 用于回答：
-    # 手机现在是什么状态？
-    # -------------------------
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS phone_activity_latest (
@@ -219,17 +224,6 @@ def get_db():
             updated_at TEXT NOT NULL
         )
     """)
-
-    # -------------------------
-    # Phone Activity 事件历史
-    #
-    # 用于后续 timeline：
-    # screen_on
-    # screen_off
-    # unlock
-    # lock
-    # app_changed
-    # -------------------------
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS phone_activity_events (
@@ -298,7 +292,7 @@ def check_token():
 
 
 # =========================
-# Sensor Reality 数据读取
+# Sensor 数据读取
 # =========================
 
 def load_latest_sensors():
@@ -362,7 +356,438 @@ def load_latest_sensors():
 
 
 # =========================
-# Phone Activity 数据读取
+# Phone Activity
+# 事件读取
+# =========================
+
+def load_recent_phone_events(
+    minutes=60,
+    limit=100
+):
+    now_epoch = utc_now_epoch()
+
+    cutoff = (
+        now_epoch
+        - minutes * 60
+    )
+
+    conn = get_db()
+
+    rows = conn.execute("""
+        SELECT
+            event_type,
+            screen,
+            locked,
+            app_name,
+            app_package,
+            event_time,
+            received_at
+
+        FROM phone_activity_events
+
+        WHERE event_time >= ?
+
+        ORDER BY event_time DESC
+
+        LIMIT ?
+    """, (
+        cutoff,
+        limit
+    )).fetchall()
+
+    conn.close()
+
+    events = []
+
+    for row in rows:
+        locked_value = (
+            row["locked"]
+        )
+
+        if locked_value == "true":
+            locked = True
+
+        elif locked_value == "false":
+            locked = False
+
+        else:
+            locked = None
+
+        events.append({
+            "event_type": (
+                row["event_type"]
+            ),
+            "screen": (
+                row["screen"]
+            ),
+            "locked": locked,
+            "app_name": (
+                row["app_name"]
+            ),
+            "app_package": (
+                row["app_package"]
+            ),
+            "event_time": (
+                row["event_time"]
+            ),
+            "event_at": (
+                epoch_to_iso(
+                    row["event_time"]
+                )
+            ),
+            "received_at": (
+                row["received_at"]
+            )
+        })
+
+    return events
+
+
+# =========================
+# 当前屏幕状态持续时间
+# =========================
+
+def get_screen_state_duration(
+    current_screen
+):
+    if current_screen not in (
+        "on",
+        "off"
+    ):
+        return {
+            "seconds": None,
+            "minutes": None
+        }
+
+    conn = get_db()
+
+    event_type = (
+        "screen_on"
+        if current_screen == "on"
+        else "screen_off"
+    )
+
+    row = conn.execute("""
+        SELECT event_time
+
+        FROM phone_activity_events
+
+        WHERE event_type = ?
+
+        ORDER BY event_time DESC
+
+        LIMIT 1
+    """, (
+        event_type,
+    )).fetchone()
+
+    conn.close()
+
+    if row is None:
+        return {
+            "seconds": None,
+            "minutes": None
+        }
+
+    seconds = max(
+        0,
+        utc_now_epoch()
+        - row["event_time"]
+    )
+
+    return {
+        "seconds": seconds,
+        "minutes": seconds // 60
+    }
+
+
+# =========================
+# Timeline 整理
+# =========================
+
+def build_phone_timeline(
+    minutes=60,
+    limit=20
+):
+    raw_events = (
+        load_recent_phone_events(
+            minutes=minutes,
+            limit=100
+        )
+    )
+
+    timeline = []
+
+    for event in reversed(
+        raw_events
+    ):
+        event_type = event.get(
+            "event_type"
+        )
+
+        item = {
+            "event": event_type,
+            "at": event.get(
+                "event_at"
+            )
+        }
+
+        if event_type == "app_changed":
+            item["app_name"] = (
+                event.get(
+                    "app_name"
+                )
+            )
+
+            item["package_name"] = (
+                event.get(
+                    "app_package"
+                )
+            )
+
+        elif event_type in (
+            "screen_on",
+            "screen_off",
+            "unlock",
+            "lock"
+        ):
+            item["screen"] = (
+                event.get(
+                    "screen"
+                )
+            )
+
+            item["locked"] = (
+                event.get(
+                    "locked"
+                )
+            )
+
+        timeline.append(
+            item
+        )
+
+    return timeline[
+        -limit:
+    ]
+
+
+# =========================
+# 最近使用过的 App
+#
+# 这里只做简短列表。
+# V1 不做完整使用时长统计。
+# =========================
+
+def build_recent_apps(
+    minutes=60,
+    limit=5
+):
+    events = (
+        load_recent_phone_events(
+            minutes=minutes,
+            limit=100
+        )
+    )
+
+    seen = set()
+    recent_apps = []
+
+    for event in events:
+        if (
+            event.get(
+                "event_type"
+            )
+            != "app_changed"
+        ):
+            continue
+
+        package_name = event.get(
+            "app_package"
+        )
+
+        app_name = event.get(
+            "app_name"
+        )
+
+        if not package_name:
+            continue
+
+        if package_name in seen:
+            continue
+
+        seen.add(
+            package_name
+        )
+
+        recent_apps.append({
+            "app_name": app_name,
+            "package_name": (
+                package_name
+            ),
+            "last_seen_at": (
+                event.get(
+                    "event_at"
+                )
+            )
+        })
+
+        if (
+            len(recent_apps)
+            >= limit
+        ):
+            break
+
+    return recent_apps
+
+
+# =========================
+# Phone Activity Summary
+#
+# 这里只总结手机事实状态。
+# 不判断用户：
+# 睡着 / 偷懒 / 工作 /
+# 撒谎 / 需要什么。
+# =========================
+
+def build_phone_activity_summary(
+    phone_activity
+):
+    if not phone_activity:
+        return {
+            "state": "unknown",
+            "description": (
+                "当前没有可用的手机活动数据。"
+            ),
+            "confidence": "low"
+        }
+
+    screen = phone_activity.get(
+        "screen"
+    )
+
+    locked = phone_activity.get(
+        "locked"
+    )
+
+    inactive_minutes = (
+        phone_activity.get(
+            "inactive_for_minutes"
+        )
+    )
+
+    app_name = (
+        phone_activity.get(
+            "current_app",
+            {}
+        ).get(
+            "app_name"
+        )
+    )
+
+    app_duration = (
+        phone_activity.get(
+            "current_app",
+            {}
+        ).get(
+            "duration_minutes"
+        )
+    )
+
+    freshness = (
+        phone_activity.get(
+            "freshness"
+        )
+    )
+
+    if freshness != "fresh":
+        return {
+            "state": "unknown",
+            "description": (
+                "手机活动数据已经过期，"
+                "无法可靠描述当前状态。"
+            ),
+            "confidence": "low"
+        }
+
+    if (
+        screen == "off"
+        and locked is True
+    ):
+        if inactive_minutes is not None:
+            description = (
+                f"手机已锁屏，"
+                f"最近一次交互约在"
+                f"{inactive_minutes}分钟前。"
+            )
+
+        else:
+            description = (
+                "手机当前已锁屏。"
+            )
+
+        return {
+            "state": "inactive",
+            "description": description,
+            "confidence": "high"
+        }
+
+    if (
+        screen == "on"
+        and locked is True
+    ):
+        return {
+            "state": "screen_on_locked",
+            "description": (
+                "手机屏幕已亮起，"
+                "但设备当前仍处于锁定状态。"
+            ),
+            "confidence": "high"
+        }
+
+    if (
+        screen == "on"
+        and locked is False
+    ):
+        if app_name:
+            if (
+                app_duration
+                is not None
+            ):
+                description = (
+                    f"手机当前处于解锁状态，"
+                    f"前台应用为 {app_name}，"
+                    f"已持续约 {app_duration} 分钟。"
+                )
+
+            else:
+                description = (
+                    f"手机当前处于解锁状态，"
+                    f"前台应用为 {app_name}。"
+                )
+
+        else:
+            description = (
+                "手机当前处于解锁并活跃状态。"
+            )
+
+        return {
+            "state": "active",
+            "description": description,
+            "confidence": "high"
+        }
+
+    return {
+        "state": "unknown",
+        "description": (
+            "手机状态信息不完整。"
+        ),
+        "confidence": "medium"
+    }
+
+
+# =========================
+# Phone Activity 当前状态
 # =========================
 
 def load_phone_activity():
@@ -449,12 +874,68 @@ def load_phone_activity():
     else:
         locked = None
 
+    screen_duration = (
+        get_screen_state_duration(
+            row["screen"]
+        )
+    )
+
+    current_app = None
+
+    if (
+        row["screen"] == "on"
+        and locked is False
+        and row["app_name"]
+    ):
+        current_app = {
+            "app_name": (
+                row["app_name"]
+            ),
+
+            "package_name": (
+                row["app_package"]
+            ),
+
+            "started_at": (
+                epoch_to_iso(
+                    app_since
+                )
+            ),
+
+            "duration_seconds": (
+                app_duration_seconds
+            ),
+
+            "duration_minutes": (
+                app_duration_minutes
+            )
+        }
+
     return {
         "screen": row["screen"],
+
         "locked": locked,
+
+        "screen_state_duration_seconds": (
+            screen_duration[
+                "seconds"
+            ]
+        ),
+
+        "screen_state_duration_minutes": (
+            screen_duration[
+                "minutes"
+            ]
+        ),
 
         "last_interaction": (
             last_interaction
+        ),
+
+        "last_interaction_at": (
+            epoch_to_iso(
+                last_interaction
+            )
         ),
 
         "inactive_for_seconds": (
@@ -465,25 +946,25 @@ def load_phone_activity():
             inactive_for_minutes
         ),
 
-        "app_name": (
-            row["app_name"]
+        "current_app": (
+            current_app
         ),
 
-        "app_package": (
-            row["app_package"]
+        "recent_apps": (
+            build_recent_apps(
+                minutes=60,
+                limit=5
+            )
         ),
 
-        "app_since": app_since,
-
-        "app_duration_seconds": (
-            app_duration_seconds
+        "recent_timeline": (
+            build_phone_timeline(
+                minutes=60,
+                limit=20
+            )
         ),
 
-        "app_duration_minutes": (
-            app_duration_minutes
-        ),
-
-        "updated_at": (
+        "last_updated": (
             row["updated_at"]
         ),
 
@@ -501,89 +982,8 @@ def load_phone_activity():
     }
 
 
-def load_recent_phone_events(
-    minutes=60,
-    limit=50
-):
-    now_epoch = utc_now_epoch()
-
-    cutoff = (
-        now_epoch
-        - minutes * 60
-    )
-
-    conn = get_db()
-
-    rows = conn.execute("""
-        SELECT
-            event_type,
-            screen,
-            locked,
-            app_name,
-            app_package,
-            event_time,
-            received_at
-
-        FROM phone_activity_events
-
-        WHERE event_time >= ?
-
-        ORDER BY event_time DESC
-
-        LIMIT ?
-    """, (
-        cutoff,
-        limit
-    )).fetchall()
-
-    conn.close()
-
-    events = []
-
-    for row in rows:
-        locked_value = (
-            row["locked"]
-        )
-
-        if locked_value == "true":
-            locked = True
-
-        elif locked_value == "false":
-            locked = False
-
-        else:
-            locked = None
-
-        events.append({
-            "event_type": (
-                row["event_type"]
-            ),
-            "screen": (
-                row["screen"]
-            ),
-            "locked": locked,
-            "app_name": (
-                row["app_name"]
-            ),
-            "app_package": (
-                row["app_package"]
-            ),
-            "event_time": (
-                row["event_time"]
-            ),
-            "received_at": (
-                row["received_at"]
-            )
-        })
-
-    return events
-
-
 # =========================
 # 当前完整上下文
-#
-# 所有 Reality API 尽量从这里
-# 获取同一份当前现实。
 # =========================
 
 def build_current_context():
@@ -612,6 +1012,12 @@ def build_current_context():
         load_phone_activity()
     )
 
+    phone_activity_summary = (
+        build_phone_activity_summary(
+            phone_activity
+        )
+    )
+
     return {
         "sensors": sensors,
         "semantic": semantic,
@@ -619,16 +1025,15 @@ def build_current_context():
         "reality": reality,
         "phone_activity": (
             phone_activity
+        ),
+        "phone_activity_summary": (
+            phone_activity_summary
         )
     }
 
 
 # =========================
 # 健康检查
-#
-# 公开接口。
-# 只说明服务器是否在线，
-# 不返回任何用户现实数据。
 # =========================
 
 @app.route(
@@ -848,12 +1253,7 @@ def receive_data():
 
 
 # =========================
-# Tasker Phone Activity
-# 数据入口
-#
-# Tasker 将手机状态发送到：
-#
-# POST /phone/activity
+# Tasker Phone Activity 数据入口
 # =========================
 
 @app.route(
@@ -903,10 +1303,6 @@ def receive_phone_activity():
     app_since = data.get(
         "app_since"
     )
-
-    # -------------------------
-    # 基础字段规范化
-    # -------------------------
 
     if screen not in (
         "on",
@@ -983,14 +1379,6 @@ def receive_phone_activity():
         WHERE id = 1
     """).fetchone()
 
-    # -------------------------
-    # 判断这次变化是什么事件
-    #
-    # 服务器只做事实层判断。
-    # 不判断用户是否睡着、
-    # 是否工作、是否偷懒等。
-    # -------------------------
-
     event_type = "update"
 
     if old is None:
@@ -1001,10 +1389,14 @@ def receive_phone_activity():
         != screen
     ):
         if screen == "on":
-            event_type = "screen_on"
+            event_type = (
+                "screen_on"
+            )
 
         elif screen == "off":
-            event_type = "screen_off"
+            event_type = (
+                "screen_off"
+            )
 
     elif (
         old["locked"]
@@ -1020,17 +1412,17 @@ def receive_phone_activity():
         old["app_package"]
         != app_package
     ):
-        event_type = "app_changed"
+        event_type = (
+            "app_changed"
+        )
 
     elif (
         old["last_interaction"]
         != last_interaction
     ):
-        event_type = "interaction"
-
-    # -------------------------
-    # 保存当前最新状态
-    # -------------------------
+        event_type = (
+            "interaction"
+        )
 
     conn.execute("""
         INSERT INTO
@@ -1083,13 +1475,6 @@ def receive_phone_activity():
         received_at
     ))
 
-    # -------------------------
-    # 保存历史事件
-    #
-    # update 类型不写入历史，
-    # 避免 timeline 被重复快照淹没。
-    # -------------------------
-
     if event_type != "update":
         conn.execute("""
             INSERT INTO
@@ -1131,12 +1516,7 @@ def receive_phone_activity():
 
 
 # =========================
-# 旧版完整调试上下文
-#
-# 保留。
-#
-# 现在额外增加：
-# phone_activity
+# 完整调试 Context
 # =========================
 
 @app.route(
@@ -1180,24 +1560,18 @@ def context():
             current[
                 "phone_activity"
             ]
+        ),
+
+        "phone_activity_summary": (
+            current[
+                "phone_activity_summary"
+            ]
         )
     })
 
 
-# =========================================================
-# Xiaxia Reality Action API
-# =========================================================
-
-
 # =========================
-# 1. 完整现实上下文
-#
-# 现在同时返回：
-# reality
-# phone_activity
-#
-# Phone Activity 仍保持模块化，
-# 不强行塞进 reality.py。
+# Reality Context
 # =========================
 
 @app.route(
@@ -1229,12 +1603,18 @@ def reality_context():
             current[
                 "phone_activity"
             ]
+        ),
+
+        "phone_activity_summary": (
+            current[
+                "phone_activity_summary"
+            ]
         )
     })
 
 
 # =========================
-# 2. Reality 摘要
+# Reality Summary
 # =========================
 
 @app.route(
@@ -1274,12 +1654,18 @@ def reality_summary():
                 "inferences",
                 {}
             )
+        ),
+
+        "phone_activity_summary": (
+            current[
+                "phone_activity_summary"
+            ]
         )
     })
 
 
 # =========================
-# 3. 环境现实
+# 环境 Reality
 # =========================
 
 @app.route(
@@ -1354,7 +1740,7 @@ def reality_environment():
 
 
 # =========================
-# 4. 设备现实
+# Device Reality
 # =========================
 
 @app.route(
@@ -1427,7 +1813,7 @@ def reality_device():
 
 
 # =========================
-# 5. 位置现实
+# Location Reality
 # =========================
 
 @app.route(
@@ -1488,22 +1874,7 @@ def reality_location():
 
 
 # =========================
-# 6. Phone Activity Reality
-#
-# 给夏夏读取当前手机状态。
-#
-# 事实层：
-# screen
-# locked
-# last interaction
-# current app
-# duration
-# freshness
-#
-# 不判断：
-# 是否睡觉
-# 是否偷懒
-# 是否工作
+# Phone Activity Reality
 # =========================
 
 @app.route(
@@ -1516,8 +1887,8 @@ def reality_phone():
     if auth_error:
         return auth_error
 
-    phone_activity = (
-        load_phone_activity()
+    current = (
+        build_current_context()
     )
 
     return jsonify({
@@ -1528,20 +1899,21 @@ def reality_phone():
         ),
 
         "phone_activity": (
-            phone_activity
+            current[
+                "phone_activity"
+            ]
+        ),
+
+        "phone_activity_summary": (
+            current[
+                "phone_activity_summary"
+            ]
         )
     })
 
 
 # =========================
-# 7. Phone Activity Timeline
-#
-# 默认返回最近 60 分钟。
-#
-# 可使用：
-# ?minutes=30
-# ?minutes=60
-# ?minutes=120
+# Phone Activity Timeline
 # =========================
 
 @app.route(
@@ -1573,8 +1945,8 @@ def reality_phone_timeline():
         )
     )
 
-    events = (
-        load_recent_phone_events(
+    timeline = (
+        build_phone_timeline(
             minutes=minutes,
             limit=100
         )
@@ -1592,17 +1964,17 @@ def reality_phone_timeline():
         ),
 
         "event_count": (
-            len(events)
+            len(timeline)
         ),
 
-        "events": events
+        "timeline": (
+            timeline
+        )
     })
 
 
 # =========================
-# 8. 感知系统状态
-#
-# 保留原 Sensor 状态接口。
+# Reality Status
 # =========================
 
 @app.route(
@@ -1767,7 +2139,7 @@ def reality_status():
 
             "updated_at": (
                 phone_activity.get(
-                    "updated_at"
+                    "last_updated"
                 )
                 if phone_activity
                 else None
@@ -1777,10 +2149,7 @@ def reality_status():
 
 
 # =========================
-# 浏览器人工检查页面
-#
-# 保留原来的手工检查方式。
-# 现在也会显示 Phone Activity。
+# Context 浏览器检查
 # =========================
 
 @app.route(
@@ -1813,8 +2182,8 @@ def context_check():
 
             <p>
                 Enter SENSE_TOKEN to inspect
-                the latest sensor and
-                phone activity data.
+                the latest Reality and
+                Phone Activity data.
             </p>
 
             <form method="post">
@@ -1892,18 +2261,18 @@ def context_check():
             current[
                 "phone_activity"
             ]
+        ),
+
+        "phone_activity_summary": (
+            current[
+                "phone_activity_summary"
+            ]
         )
     })
 
 
 # =========================
-# Phone Activity Timeline
-# 浏览器人工检查页面
-#
-# 用于手工查看最近一段时间的
-# 手机事件历史。
-#
-# 默认查看最近 10 分钟。
+# Timeline 浏览器检查
 # =========================
 
 @app.route(
@@ -1936,7 +2305,7 @@ def phone_timeline_check():
 
             <p>
                 Enter SENSE_TOKEN to inspect
-                recent phone activity events.
+                recent phone activity.
             </p>
 
             <form method="post">
@@ -2021,8 +2390,8 @@ def phone_timeline_check():
         )
     )
 
-    events = (
-        load_recent_phone_events(
+    timeline = (
+        build_phone_timeline(
             minutes=minutes,
             limit=100
         )
@@ -2040,11 +2409,11 @@ def phone_timeline_check():
         ),
 
         "event_count": (
-            len(events)
+            len(timeline)
         ),
 
-        "events": (
-            events
+        "timeline": (
+            timeline
         )
     })
 
