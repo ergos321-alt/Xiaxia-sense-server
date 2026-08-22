@@ -254,7 +254,65 @@ def context():
         "sensors": sensors
     })
 
+@app.route("/context-check", methods=["GET", "POST"])
+def context_check():
+    if request.method == "GET":
+        return """
+        <!doctype html>
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <title>Xiaxia Sense Context Check</title>
+        </head>
+        <body style="font-family: sans-serif; max-width: 700px; margin: 40px auto;">
+            <h2>👁 Xiaxia Sense Context Check</h2>
+            <p>Enter SENSE_TOKEN to inspect the latest sensor data.</p>
 
+            <form method="post">
+                <input
+                    type="password"
+                    name="token"
+                    placeholder="SENSE_TOKEN"
+                    style="width: 100%; padding: 10px; box-sizing: border-box;"
+                    required
+                >
+                <br><br>
+                <button type="submit" style="padding: 10px 18px;">
+                    Read Context
+                </button>
+            </form>
+        </body>
+        </html>
+        """
+
+    token = request.form.get("token", "")
+
+    if not SENSE_TOKEN or token != SENSE_TOKEN:
+        return jsonify({"error": "unauthorized"}), 401
+
+    conn = get_db()
+
+    rows = conn.execute("""
+        SELECT sensor_name, sensor_time_ns, values_json, updated_at
+        FROM sensor_latest
+        ORDER BY sensor_name
+    """).fetchall()
+
+    conn.close()
+
+    sensors = {}
+
+    for row in rows:
+        sensors[row["sensor_name"]] = {
+            "time_ns": row["sensor_time_ns"],
+            "values": json.loads(row["values_json"]),
+            "updated_at": row["updated_at"]
+        }
+
+    return jsonify({
+        "status": "ok",
+        "sensors": sensors
+    })
 # =========================
 # 本地运行
 # =========================
