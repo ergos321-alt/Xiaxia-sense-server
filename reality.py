@@ -6,7 +6,8 @@ def build_reality_context(semantic, weather):
     - user_state / device / environment / network / location / weather:
       Direct interpreted facts.
     - summary:
-      Higher-level deterministic descriptions derived from facts.
+      Higher-level deterministic descriptions derived from facts,
+      including stable human-readable descriptions.
     - inferences:
       Conservative contextual guesses with explicit confidence.
 
@@ -219,6 +220,7 @@ def build_reality_context(semantic, weather):
 
         if rain_state is not None:
             reality["summary"]["precipitation"] = rain_state
+
         elif (
             isinstance(precipitation, (int, float))
             and precipitation <= 0
@@ -297,6 +299,234 @@ def build_reality_context(semantic, weather):
             reality["summary"]["ambient_sound"] = sound_state
 
     # =========================
+    # 人类可理解的现实描述
+    #
+    # 这一部分只翻译已经确定的事实/摘要。
+    # 不生成对用户行为、情绪或意图的猜测。
+    # =========================
+
+    descriptions = []
+
+    # ---------- 天气描述 ----------
+
+    weather_parts = []
+
+    thermal_feel = reality["summary"].get("thermal_feel")
+
+    thermal_description_map = {
+        "extremely_hot": "体感非常炎热",
+        "very_hot": "体感很热",
+        "hot": "体感偏热",
+        "warm": "体感温暖",
+        "comfortable": "体感比较舒适",
+        "cool": "体感偏凉",
+        "cold": "体感寒冷",
+        "very_cold": "体感非常寒冷"
+    }
+
+    if thermal_feel in thermal_description_map:
+        weather_parts.append(
+            thermal_description_map[thermal_feel]
+        )
+
+    precipitation_state = reality["summary"].get(
+        "precipitation"
+    )
+
+    precipitation_description_map = {
+        "light_rain": "正在下小雨",
+        "rain": "正在下雨",
+        "heavy_rain": "正在下较大的雨",
+        "none": "目前没有降水"
+    }
+
+    if precipitation_state in precipitation_description_map:
+        weather_parts.append(
+            precipitation_description_map[
+                precipitation_state
+            ]
+        )
+
+    humidity = weather_data.get("humidity_percent")
+
+    if isinstance(humidity, (int, float)):
+        if humidity >= 80:
+            weather_parts.append("空气湿度很高")
+        elif humidity >= 70:
+            weather_parts.append("空气比较潮湿")
+        elif humidity <= 30:
+            weather_parts.append("空气比较干燥")
+
+    wind_speed = weather_data.get("wind_speed_kmh")
+
+    if isinstance(wind_speed, (int, float)):
+        if wind_speed >= 50:
+            weather_parts.append("风很强")
+        elif wind_speed >= 30:
+            weather_parts.append("风比较大")
+        elif wind_speed >= 15:
+            weather_parts.append("有比较明显的风")
+
+    if weather_parts:
+        weather_description = "，".join(weather_parts) + "。"
+
+        reality["summary"][
+            "weather_description"
+        ] = weather_description
+
+        descriptions.append(weather_description.rstrip("。"))
+
+    # ---------- 周围环境描述 ----------
+
+    surroundings_parts = []
+
+    ambient_light = reality["summary"].get(
+        "ambient_light"
+    )
+
+    light_description_map = {
+        "dark": "周围很暗",
+        "dim": "周围光线较暗",
+        "normal": "周围光线正常",
+        "bright": "周围比较明亮",
+        "very_bright": "周围光线很强"
+    }
+
+    if ambient_light in light_description_map:
+        surroundings_parts.append(
+            light_description_map[ambient_light]
+        )
+
+    ambient_sound = reality["summary"].get(
+        "ambient_sound"
+    )
+
+    sound_description_map = {
+        "very_quiet": "环境非常安静",
+        "quiet": "环境比较安静",
+        "moderate": "周围有一些环境声音",
+        "loud": "周围比较吵",
+        "very_loud": "周围非常吵"
+    }
+
+    if ambient_sound in sound_description_map:
+        surroundings_parts.append(
+            sound_description_map[ambient_sound]
+        )
+
+    if surroundings_parts:
+        surroundings_description = (
+            "，".join(surroundings_parts) + "。"
+        )
+
+        reality["summary"][
+            "surroundings_description"
+        ] = surroundings_description
+
+        descriptions.append(
+            surroundings_description.rstrip("。")
+        )
+
+    # ---------- 移动状态描述 ----------
+
+    mobility = reality["summary"].get("mobility")
+
+    mobility_description_map = {
+        "not_moving": "手机目前没有明显移动",
+        "moving_on_foot": "手机正在随步行移动",
+        "moving_on_foot_fast": "手机正在快速移动，可能伴随跑动",
+        "cycling": "手机正在随骑行移动",
+        "in_vehicle": "手机正在随交通工具移动"
+    }
+
+    if mobility in mobility_description_map:
+        mobility_description = (
+            mobility_description_map[mobility] + "。"
+        )
+
+        reality["summary"][
+            "mobility_description"
+        ] = mobility_description
+
+        descriptions.append(
+            mobility_description.rstrip("。")
+        )
+
+    # ---------- 设备状态描述 ----------
+
+    device_parts = []
+
+    device_power = reality["summary"].get(
+        "device_power"
+    )
+
+    power_description_map = {
+        "charging": "手机正在充电",
+        "critical": "手机电量已经非常低",
+        "low": "手机电量较低",
+        "high": "手机电量充足"
+    }
+
+    if device_power in power_description_map:
+        device_parts.append(
+            power_description_map[device_power]
+        )
+
+    low_power_mode = device.get("low_power_mode")
+
+    if low_power_mode is True:
+        device_parts.append("手机开启了低电量模式")
+
+    if device_parts:
+        device_description = (
+            "，".join(device_parts) + "。"
+        )
+
+        reality["summary"][
+            "device_description"
+        ] = device_description
+
+        descriptions.append(
+            device_description.rstrip("。")
+        )
+
+    # ---------- 网络状态描述 ----------
+
+    connectivity = reality["summary"].get(
+        "connectivity"
+    )
+
+    connectivity_description_map = {
+        "offline": "手机当前没有网络连接",
+        "online_weak": "手机已联网，但网络信号较弱",
+        "online_normal": "手机网络连接正常",
+        "online_strong": "手机网络连接良好",
+        "online": "手机当前已联网"
+    }
+
+    if connectivity in connectivity_description_map:
+        connectivity_description = (
+            connectivity_description_map[
+                connectivity
+            ] + "。"
+        )
+
+        reality["summary"][
+            "connectivity_description"
+        ] = connectivity_description
+
+        descriptions.append(
+            connectivity_description.rstrip("。")
+        )
+
+    # ---------- 综合现实描述 ----------
+
+    if descriptions:
+        reality["summary"]["overall_description"] = (
+            "；".join(descriptions) + "。"
+        )
+
+    # =========================
     # 保守情境推断
     #
     # 注意：
@@ -305,8 +535,12 @@ def build_reality_context(semantic, weather):
     # =========================
 
     mobility = reality["summary"].get("mobility")
-    ambient_light = reality["summary"].get("ambient_light")
-    ambient_sound = reality["summary"].get("ambient_sound")
+    ambient_light = reality["summary"].get(
+        "ambient_light"
+    )
+    ambient_sound = reality["summary"].get(
+        "ambient_sound"
+    )
 
     # 静止 + 黑暗 + 安静
     # 可能处于休息环境，但不能推断“正在睡觉”
@@ -329,8 +563,14 @@ def build_reality_context(semantic, weather):
     # 可能处于活跃的公共/工作环境
     elif (
         mobility == "not_moving"
-        and ambient_light in ("bright", "very_bright")
-        and ambient_sound in ("moderate", "loud")
+        and ambient_light in (
+            "bright",
+            "very_bright"
+        )
+        and ambient_sound in (
+            "moderate",
+            "loud"
+        )
     ):
         reality["inferences"]["possible_context"] = {
             "value": "active_environment",
@@ -358,7 +598,9 @@ def build_reality_context(semantic, weather):
         else:
             location_quality = "poor"
 
-        reality["summary"]["location_quality"] = location_quality
+        reality["summary"][
+            "location_quality"
+        ] = location_quality
 
     # =========================
     # 清理空值
