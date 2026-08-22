@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 
 from flask import Flask, request, jsonify
 from semantic import build_semantic_context
+from weather import build_weather_context
 
 
 app = Flask(__name__)
@@ -71,7 +72,6 @@ def get_db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
 
-    # 保存每一次 SensorLogger 上传的原始消息
     conn.execute("""
         CREATE TABLE IF NOT EXISTS messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -83,7 +83,6 @@ def get_db():
         )
     """)
 
-    # 每种传感器只保存“目前最新的一条”
     conn.execute("""
         CREATE TABLE IF NOT EXISTS sensor_latest (
             sensor_name TEXT PRIMARY KEY,
@@ -105,11 +104,6 @@ def get_db():
 # =========================
 
 def check_token():
-    """
-    /data 和 /context 都需要 Bearer Token。
-    正式部署时必须设置 SENSE_TOKEN 环境变量。
-    """
-
     if not SENSE_TOKEN:
         return jsonify({
             "error": "server_not_configured",
@@ -152,6 +146,7 @@ def ping():
 @app.route("/data", methods=["POST"])
 def receive_data():
     auth_error = check_token()
+
     if auth_error:
         return auth_error
 
@@ -171,7 +166,6 @@ def receive_data():
 
     conn = get_db()
 
-    # 1. 保存完整原始消息
     conn.execute("""
         INSERT INTO messages (
             message_id,
@@ -191,7 +185,6 @@ def receive_data():
 
     updated_sensors = []
 
-    # 2. 拆开 payload，把每种传感器最新状态保存下来
     if isinstance(payload, list):
         for reading in payload:
 
@@ -214,8 +207,6 @@ def receive_data():
                 WHERE sensor_name = ?
             """, (sensor_name,)).fetchone()
 
-            # SensorLogger 消息可能乱序到达。
-            # 只有这条数据真的比数据库里的更新，才覆盖。
             if old is None or sensor_time_ns > old["sensor_time_ns"]:
 
                 conn.execute("""
@@ -254,7 +245,11 @@ def receive_data():
 
     return jsonify({
         "status": "ok",
-        "received": len(payload) if isinstance(payload, list) else 0,
+        "received": (
+            len(payload)
+            if isinstance(payload, list)
+            else 0
+        ),
         "updated_sensors": updated_sensors
     }), 200
 
@@ -266,6 +261,7 @@ def receive_data():
 @app.route("/context", methods=["GET"])
 def context():
     auth_error = check_token()
+
     if auth_error:
         return auth_error
 
@@ -287,6 +283,7 @@ def context():
 
     for row in rows:
         sensor_name = row["sensor_name"]
+
         freshness = freshness_info(
             sensor_name,
             row["updated_at"]
@@ -294,18 +291,27 @@ def context():
 
         sensors[sensor_name] = {
             "time_ns": row["sensor_time_ns"],
-            "values": json.loads(row["values_json"]),
+            "values": json.loads(
+                row["values_json"]
+            ),
             "updated_at": row["updated_at"],
             "age_seconds": freshness["age_seconds"],
             "freshness": freshness["freshness"]
         }
 
-    semantic = build_semantic_context(sensors)
+    semantic = build_semantic_context(
+        sensors
+    )
+
+    weather = build_weather_context(
+        semantic
+    )
 
     return jsonify({
         "status": "ok",
         "sensors": sensors,
-        "semantic": semantic
+        "semantic": semantic,
+        "weather": weather
     })
 
 
@@ -313,7 +319,10 @@ def context():
 # 浏览器人工检查页面
 # =========================
 
-@app.route("/context-check", methods=["GET", "POST"])
+@app.route(
+    "/context-check",
+    methods=["GET", "POST"]
+)
 def context_check():
     if request.method == "GET":
         return """
@@ -323,20 +332,37 @@ def context_check():
             <meta charset="utf-8">
             <title>Xiaxia Sense Context Check</title>
         </head>
-        <body style="font-family: sans-serif; max-width: 700px; margin: 40px auto;">
+        <body style="
+            font-family: sans-serif;
+            max-width: 700px;
+            margin: 40px auto;
+        ">
             <h2>👁 Xiaxia Sense Context Check</h2>
-            <p>Enter SENSE_TOKEN to inspect the latest sensor data.</p>
+
+            <p>
+                Enter SENSE_TOKEN to inspect
+                the latest sensor data.
+            </p>
 
             <form method="post">
                 <input
                     type="password"
                     name="token"
                     placeholder="SENSE_TOKEN"
-                    style="width: 100%; padding: 10px; box-sizing: border-box;"
+                    style="
+                        width: 100%;
+                        padding: 10px;
+                        box-sizing: border-box;
+                    "
                     required
                 >
+
                 <br><br>
-                <button type="submit" style="padding: 10px 18px;">
+
+                <button
+                    type="submit"
+                    style="padding: 10px 18px;"
+                >
                     Read Context
                 </button>
             </form>
@@ -344,7 +370,10 @@ def context_check():
         </html>
         """
 
-    token = request.form.get("token", "")
+    token = request.form.get(
+        "token",
+        ""
+    )
 
     if not SENSE_TOKEN or token != SENSE_TOKEN:
         return jsonify({
@@ -369,6 +398,7 @@ def context_check():
 
     for row in rows:
         sensor_name = row["sensor_name"]
+
         freshness = freshness_info(
             sensor_name,
             row["updated_at"]
@@ -376,18 +406,27 @@ def context_check():
 
         sensors[sensor_name] = {
             "time_ns": row["sensor_time_ns"],
-            "values": json.loads(row["values_json"]),
+            "values": json.loads(
+                row["values_json"]
+            ),
             "updated_at": row["updated_at"],
             "age_seconds": freshness["age_seconds"],
             "freshness": freshness["freshness"]
         }
 
-    semantic = build_semantic_context(sensors)
+    semantic = build_semantic_context(
+        sensors
+    )
+
+    weather = build_weather_context(
+        semantic
+    )
 
     return jsonify({
         "status": "ok",
         "sensors": sensors,
-        "semantic": semantic
+        "semantic": semantic,
+        "weather": weather
     })
 
 
@@ -396,7 +435,13 @@ def context_check():
 # =========================
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8000))
+    port = int(
+        os.environ.get(
+            "PORT",
+            8000
+        )
+    )
+
     app.run(
         host="0.0.0.0",
         port=port
