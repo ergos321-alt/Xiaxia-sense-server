@@ -282,23 +282,22 @@ def context():
 
     sensors = {}
 
-    for row in rows:
-    sensor_name = row["sensor_name"]
-    freshness = freshness_info(sensor_name, row["updated_at"])
+       for row in rows:
+        sensor_name = row["sensor_name"]
+        freshness = freshness_info(sensor_name, row["updated_at"])
 
-    sensors[sensor_name] = {
-        "time_ns": row["sensor_time_ns"],
-        "values": json.loads(row["values_json"]),
-        "updated_at": row["updated_at"],
-        "age_seconds": freshness["age_seconds"],
-        "freshness": freshness["freshness"]
-    }
+        sensors[sensor_name] = {
+            "time_ns": row["sensor_time_ns"],
+            "values": json.loads(row["values_json"]),
+            "updated_at": row["updated_at"],
+            "age_seconds": freshness["age_seconds"],
+            "freshness": freshness["freshness"]
+        }
 
     return jsonify({
         "status": "ok",
         "sensors": sensors
     })
-
 @app.route("/context-check", methods=["GET", "POST"])
 def context_check():
     if request.method == "GET":
@@ -348,10 +347,15 @@ def context_check():
     sensors = {}
 
     for row in rows:
-        sensors[row["sensor_name"]] = {
+        sensor_name = row["sensor_name"]
+        freshness = freshness_info(sensor_name, row["updated_at"])
+
+        sensors[sensor_name] = {
             "time_ns": row["sensor_time_ns"],
             "values": json.loads(row["values_json"]),
-            "updated_at": row["updated_at"]
+            "updated_at": row["updated_at"],
+            "age_seconds": freshness["age_seconds"],
+            "freshness": freshness["freshness"]
         }
 
     return jsonify({
