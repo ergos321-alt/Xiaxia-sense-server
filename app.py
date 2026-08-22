@@ -18,6 +18,7 @@ DATA_DIR = os.environ.get("DATA_DIR", "/tmp")
 os.makedirs(DATA_DIR, exist_ok=True)
 
 DB_PATH = os.path.join(DATA_DIR, "xiaxia_sense.db")
+
 FRESHNESS_THRESHOLDS = {
     "battery": 120,
     "light": 60,
@@ -59,6 +60,7 @@ def freshness_info(sensor_name, updated_at):
             "age_seconds": None,
             "freshness": "unknown"
         }
+
 
 # =========================
 # 数据库
@@ -282,9 +284,12 @@ def context():
 
     sensors = {}
 
-       for row in rows:
+    for row in rows:
         sensor_name = row["sensor_name"]
-        freshness = freshness_info(sensor_name, row["updated_at"])
+        freshness = freshness_info(
+            sensor_name,
+            row["updated_at"]
+        )
 
         sensors[sensor_name] = {
             "time_ns": row["sensor_time_ns"],
@@ -298,6 +303,12 @@ def context():
         "status": "ok",
         "sensors": sensors
     })
+
+
+# =========================
+# 浏览器人工检查页面
+# =========================
+
 @app.route("/context-check", methods=["GET", "POST"])
 def context_check():
     if request.method == "GET":
@@ -332,12 +343,18 @@ def context_check():
     token = request.form.get("token", "")
 
     if not SENSE_TOKEN or token != SENSE_TOKEN:
-        return jsonify({"error": "unauthorized"}), 401
+        return jsonify({
+            "error": "unauthorized"
+        }), 401
 
     conn = get_db()
 
     rows = conn.execute("""
-        SELECT sensor_name, sensor_time_ns, values_json, updated_at
+        SELECT
+            sensor_name,
+            sensor_time_ns,
+            values_json,
+            updated_at
         FROM sensor_latest
         ORDER BY sensor_name
     """).fetchall()
@@ -348,7 +365,10 @@ def context_check():
 
     for row in rows:
         sensor_name = row["sensor_name"]
-        freshness = freshness_info(sensor_name, row["updated_at"])
+        freshness = freshness_info(
+            sensor_name,
+            row["updated_at"]
+        )
 
         sensors[sensor_name] = {
             "time_ns": row["sensor_time_ns"],
@@ -362,6 +382,8 @@ def context_check():
         "status": "ok",
         "sensors": sensors
     })
+
+
 # =========================
 # 本地运行
 # =========================
