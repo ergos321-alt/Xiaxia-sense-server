@@ -1897,6 +1897,159 @@ def context_check():
 
 
 # =========================
+# Phone Activity Timeline
+# 浏览器人工检查页面
+#
+# 用于手工查看最近一段时间的
+# 手机事件历史。
+#
+# 默认查看最近 10 分钟。
+# =========================
+
+@app.route(
+    "/phone-timeline-check",
+    methods=["GET", "POST"]
+)
+def phone_timeline_check():
+    if request.method == "GET":
+        return """
+        <!doctype html>
+        <html>
+
+        <head>
+            <meta charset="utf-8">
+
+            <title>
+                Xiaxia Phone Timeline Check
+            </title>
+        </head>
+
+        <body style="
+            font-family: sans-serif;
+            max-width: 700px;
+            margin: 40px auto;
+        ">
+
+            <h2>
+                📱 Xiaxia Phone Timeline Check
+            </h2>
+
+            <p>
+                Enter SENSE_TOKEN to inspect
+                recent phone activity events.
+            </p>
+
+            <form method="post">
+
+                <input
+                    type="password"
+                    name="token"
+                    placeholder="SENSE_TOKEN"
+                    style="
+                        width: 100%;
+                        padding: 10px;
+                        box-sizing: border-box;
+                    "
+                    required
+                >
+
+                <br><br>
+
+                <label>
+                    Minutes:
+                </label>
+
+                <input
+                    type="number"
+                    name="minutes"
+                    value="10"
+                    min="1"
+                    max="1440"
+                    style="
+                        width: 100%;
+                        padding: 10px;
+                        box-sizing: border-box;
+                    "
+                >
+
+                <br><br>
+
+                <button
+                    type="submit"
+                    style="
+                        padding: 10px 18px;
+                    "
+                >
+                    Read Timeline
+                </button>
+
+            </form>
+
+        </body>
+        </html>
+        """
+
+    token = request.form.get(
+        "token",
+        ""
+    )
+
+    if (
+        not SENSE_TOKEN
+        or token != SENSE_TOKEN
+    ):
+        return jsonify({
+            "error": "unauthorized"
+        }), 401
+
+    try:
+        minutes = int(
+            request.form.get(
+                "minutes",
+                10
+            )
+        )
+
+    except Exception:
+        minutes = 10
+
+    minutes = max(
+        1,
+        min(
+            minutes,
+            1440
+        )
+    )
+
+    events = (
+        load_recent_phone_events(
+            minutes=minutes,
+            limit=100
+        )
+    )
+
+    return jsonify({
+        "status": "ok",
+
+        "generated_at": (
+            utc_now_iso()
+        ),
+
+        "window_minutes": (
+            minutes
+        ),
+
+        "event_count": (
+            len(events)
+        ),
+
+        "events": (
+            events
+        )
+    })
+
+
+# =========================
 # 本地运行
 # =========================
 
