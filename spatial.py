@@ -11,9 +11,7 @@ AMAP_KEY = os.environ.get(
     ""
 ).strip()
 
-AMAP_BASE = (
-    "https://restapi.amap.com"
-)
+AMAP_BASE = "https://restapi.amap.com"
 
 
 # =========================
@@ -39,7 +37,6 @@ def haversine_m(
 ):
     lat1 = _safe_float(lat1)
     lon1 = _safe_float(lon1)
-
     lat2 = _safe_float(lat2)
     lon2 = _safe_float(lon2)
 
@@ -53,13 +50,8 @@ def haversine_m(
 
     radius = 6371008.8
 
-    p1 = math.radians(
-        lat1
-    )
-
-    p2 = math.radians(
-        lat2
-    )
+    p1 = math.radians(lat1)
+    p2 = math.radians(lat2)
 
     dlat = math.radians(
         lat2 - lat1
@@ -87,9 +79,7 @@ def haversine_m(
         )
     )
 
-    return (
-        radius * c
-    )
+    return radius * c
 
 
 def bearing_deg(
@@ -100,7 +90,6 @@ def bearing_deg(
 ):
     lat1 = _safe_float(lat1)
     lon1 = _safe_float(lon1)
-
     lat2 = _safe_float(lat2)
     lon2 = _safe_float(lon2)
 
@@ -112,13 +101,8 @@ def bearing_deg(
     ):
         return None
 
-    p1 = math.radians(
-        lat1
-    )
-
-    p2 = math.radians(
-        lat2
-    )
+    p1 = math.radians(lat1)
+    p2 = math.radians(lat2)
 
     dlon = math.radians(
         lon2 - lon1
@@ -153,9 +137,7 @@ def bearing_deg(
     )
 
 
-def bearing_label(
-    degree
-):
+def bearing_label(degree):
     if not isinstance(
         degree,
         (int, float)
@@ -181,6 +163,454 @@ def bearing_label(
     ) % 8
 
     return labels[index]
+
+
+# =========================
+# 坐标系
+# =========================
+
+PI = math.pi
+
+A = 6378245.0
+
+EE = 0.00669342162296594323
+
+
+def _out_of_china(
+    latitude,
+    longitude
+):
+    """
+    GCJ-02 only applies inside mainland China.
+    """
+
+    if longitude < 72.004:
+        return True
+
+    if longitude > 137.8347:
+        return True
+
+    if latitude < 0.8293:
+        return True
+
+    if latitude > 55.8271:
+        return True
+
+    return False
+
+
+def _transform_lat(
+    x,
+    y
+):
+    result = (
+        -100.0
+        + 2.0 * x
+        + 3.0 * y
+        + 0.2 * y * y
+        + 0.1 * x * y
+        + 0.2
+        * math.sqrt(
+            abs(x)
+        )
+    )
+
+    result += (
+        (
+            20.0
+            * math.sin(
+                6.0 * x * PI
+            )
+            + 20.0
+            * math.sin(
+                2.0 * x * PI
+            )
+        )
+        * 2.0
+        / 3.0
+    )
+
+    result += (
+        (
+            20.0
+            * math.sin(
+                y * PI
+            )
+            + 40.0
+            * math.sin(
+                y / 3.0 * PI
+            )
+        )
+        * 2.0
+        / 3.0
+    )
+
+    result += (
+        (
+            160.0
+            * math.sin(
+                y / 12.0 * PI
+            )
+            + 320
+            * math.sin(
+                y * PI / 30.0
+            )
+        )
+        * 2.0
+        / 3.0
+    )
+
+    return result
+
+
+def _transform_lon(
+    x,
+    y
+):
+    result = (
+        300.0
+        + x
+        + 2.0 * y
+        + 0.1 * x * x
+        + 0.1 * x * y
+        + 0.1
+        * math.sqrt(
+            abs(x)
+        )
+    )
+
+    result += (
+        (
+            20.0
+            * math.sin(
+                6.0 * x * PI
+            )
+            + 20.0
+            * math.sin(
+                2.0 * x * PI
+            )
+        )
+        * 2.0
+        / 3.0
+    )
+
+    result += (
+        (
+            20.0
+            * math.sin(
+                x * PI
+            )
+            + 40.0
+            * math.sin(
+                x / 3.0 * PI
+            )
+        )
+        * 2.0
+        / 3.0
+    )
+
+    result += (
+        (
+            150.0
+            * math.sin(
+                x / 12.0 * PI
+            )
+            + 300.0
+            * math.sin(
+                x / 30.0 * PI
+            )
+        )
+        * 2.0
+        / 3.0
+    )
+
+    return result
+
+
+def wgs84_to_gcj02_local(
+    latitude,
+    longitude
+):
+    """
+    Local mathematical WGS84 -> GCJ02 conversion.
+
+    Amap API conversion remains the preferred path
+    for server-side current-location conversion.
+
+    This function is mainly used to support
+    GCJ02 -> WGS84 iterative inversion.
+    """
+
+    latitude = _safe_float(
+        latitude
+    )
+
+    longitude = _safe_float(
+        longitude
+    )
+
+    if (
+        latitude is None
+        or longitude is None
+    ):
+        return None
+
+    if _out_of_china(
+        latitude,
+        longitude
+    ):
+        return {
+            "latitude": latitude,
+            "longitude": longitude
+        }
+
+    d_lat = _transform_lat(
+        longitude - 105.0,
+        latitude - 35.0
+    )
+
+    d_lon = _transform_lon(
+        longitude - 105.0,
+        latitude - 35.0
+    )
+
+    rad_lat = (
+        latitude / 180.0 * PI
+    )
+
+    magic = math.sin(
+        rad_lat
+    )
+
+    magic = (
+        1
+        - EE
+        * magic
+        * magic
+    )
+
+    sqrt_magic = math.sqrt(
+        magic
+    )
+
+    d_lat = (
+        d_lat
+        * 180.0
+        / (
+            (
+                A
+                * (
+                    1 - EE
+                )
+            )
+            / (
+                magic
+                * sqrt_magic
+            )
+            * PI
+        )
+    )
+
+    d_lon = (
+        d_lon
+        * 180.0
+        / (
+            A
+            / sqrt_magic
+            * math.cos(
+                rad_lat
+            )
+            * PI
+        )
+    )
+
+    mg_lat = (
+        latitude
+        + d_lat
+    )
+
+    mg_lon = (
+        longitude
+        + d_lon
+    )
+
+    return {
+        "latitude": mg_lat,
+        "longitude": mg_lon
+    }
+
+
+def gcj02_to_wgs84(
+    latitude,
+    longitude
+):
+    """
+    Convert GCJ-02 coordinates to WGS84.
+
+    Uses iterative inversion of the standard
+    WGS84 -> GCJ02 transformation.
+
+    This is suitable for storing Amap POI
+    coordinates in the same coordinate system
+    as SensorLogger GPS.
+    """
+
+    latitude = _safe_float(
+        latitude
+    )
+
+    longitude = _safe_float(
+        longitude
+    )
+
+    if (
+        latitude is None
+        or longitude is None
+    ):
+        return {
+            "available": False,
+            "reason": (
+                "invalid_coordinates"
+            )
+        }
+
+    if _out_of_china(
+        latitude,
+        longitude
+    ):
+        return {
+            "available": True,
+            "coordinate_system": (
+                "wgs84"
+            ),
+            "latitude": latitude,
+            "longitude": longitude
+        }
+
+    guess_lat = latitude
+    guess_lon = longitude
+
+    for _ in range(10):
+
+        forward = (
+            wgs84_to_gcj02_local(
+                guess_lat,
+                guess_lon
+            )
+        )
+
+        if not forward:
+            break
+
+        lat_error = (
+            forward[
+                "latitude"
+            ]
+            - latitude
+        )
+
+        lon_error = (
+            forward[
+                "longitude"
+            ]
+            - longitude
+        )
+
+        guess_lat -= lat_error
+        guess_lon -= lon_error
+
+        if (
+            abs(lat_error)
+            < 1e-7
+            and abs(lon_error)
+            < 1e-7
+        ):
+            break
+
+    return {
+        "available": True,
+        "coordinate_system": (
+            "wgs84"
+        ),
+        "latitude": (
+            guess_lat
+        ),
+        "longitude": (
+            guess_lon
+        )
+    }
+
+
+def parse_amap_location(
+    location
+):
+    """
+    Parse an Amap location string:
+
+    "116.123456,29.123456"
+
+    Amap order:
+    longitude, latitude
+    """
+
+    if not isinstance(
+        location,
+        str
+    ):
+        return {
+            "available": False,
+            "reason": (
+                "invalid_amap_location"
+            )
+        }
+
+    try:
+        parts = (
+            location
+            .strip()
+            .split(",")
+        )
+
+        if len(parts) != 2:
+            raise ValueError(
+                "invalid coordinate count"
+            )
+
+        longitude = float(
+            parts[0]
+        )
+
+        latitude = float(
+            parts[1]
+        )
+
+    except Exception:
+        return {
+            "available": False,
+            "reason": (
+                "invalid_amap_location"
+            )
+        }
+
+    if not (
+        -90 <= latitude <= 90
+        and -180 <= longitude <= 180
+    ):
+        return {
+            "available": False,
+            "reason": (
+                "coordinates_out_of_range"
+            )
+        }
+
+    return {
+        "available": True,
+        "coordinate_system": (
+            "gcj02"
+        ),
+        "latitude": latitude,
+        "longitude": longitude
+    }
 
 
 # =========================
@@ -266,13 +696,8 @@ def _amap_get(
         params or {}
     )
 
-    query["key"] = (
-        AMAP_KEY
-    )
-
-    query["output"] = (
-        "JSON"
-    )
+    query["key"] = AMAP_KEY
+    query["output"] = "JSON"
 
     url = (
         AMAP_BASE
@@ -469,12 +894,8 @@ def convert_gps_to_amap(
         "coordinate_system": (
             "gcj02"
         ),
-        "latitude": (
-            amap_lat
-        ),
-        "longitude": (
-            amap_lon
-        )
+        "latitude": amap_lat,
+        "longitude": amap_lon
     }
 
 
@@ -666,9 +1087,7 @@ def reverse_geocode(
     nearest_road = None
 
     if roads:
-        first_road = (
-            roads[0]
-        )
+        first_road = roads[0]
 
         if isinstance(
             first_road,
@@ -941,10 +1360,8 @@ def nearby_search(
     return {
         "available": True,
         "provider": "amap",
-        "count": (
-            len(
-                pois
-            )
+        "count": len(
+            pois
         ),
         "pois": pois
     }
@@ -1185,6 +1602,9 @@ def _route_path(
             ),
             "longitude": (
                 origin_longitude
+            ),
+            "coordinate_system": (
+                "gcj02"
             )
         },
 
@@ -1194,17 +1614,42 @@ def _route_path(
             ),
             "longitude": (
                 destination_longitude
+            ),
+            "coordinate_system": (
+                "gcj02"
             )
         },
 
-        "paths": (
-            normalized
-        )
+        "paths": normalized
     }
 
 
+def route_amap_coordinates(
+    origin_latitude,
+    origin_longitude,
+    destination_latitude,
+    destination_longitude,
+    mode="walking"
+):
+    """
+    Route when both coordinates are already GCJ-02.
+
+    Useful for:
+    - current location after Amap conversion
+    - Amap POI destination
+    """
+
+    return _route_path(
+        origin_latitude,
+        origin_longitude,
+        destination_latitude,
+        destination_longitude,
+        mode
+    )
+
+
 # =========================
-# 路线规划
+# WGS84 路线规划
 # =========================
 
 def route(
@@ -1454,13 +1899,8 @@ def classify_scene(
             "evidence_count": {}
         }
 
-    primary_scene = (
-        ranked[0][0]
-    )
-
-    primary_score = (
-        ranked[0][1]
-    )
+    primary_scene = ranked[0][0]
+    primary_score = ranked[0][1]
 
     secondary_scenes = []
 
@@ -1542,16 +1982,6 @@ def classify_scene(
 
 # =========================
 # GPS 运动分析
-#
-# 核心原则：
-#
-# 1. 累计路径只能作为辅助证据
-# 2. 净位移比累计路径更重要
-# 3. Activity=stationary 时，
-#    必须有持续、方向一致、明显净位移
-#    才能推翻静止判断
-# 4. GPS 精度差时宁愿 uncertain
-#    也不制造虚假移动
 # =========================
 
 def analyze_movement(
@@ -1582,10 +2012,6 @@ def analyze_movement(
     ignored_segment_count = 0
 
     significant_segments = []
-
-    # =========================
-    # 分段处理
-    # =========================
 
     for (
         first,
@@ -1683,10 +2109,6 @@ def analyze_movement(
             )
         })
 
-    # =========================
-    # 起终点净位移
-    # =========================
-
     first = history[0]
     last = history[-1]
 
@@ -1719,9 +2141,7 @@ def analyze_movement(
     )
 
     if raw_net_displacement is None:
-        effective_net_displacement = (
-            None
-        )
+        effective_net_displacement = None
 
     else:
         effective_net_displacement = max(
@@ -1729,10 +2149,6 @@ def analyze_movement(
             raw_net_displacement
             - endpoint_uncertainty
         )
-
-    # =========================
-    # 时间窗口
-    # =========================
 
     duration_seconds = max(
         0,
@@ -1745,10 +2161,6 @@ def analyze_movement(
             0
         )
     )
-
-    # =========================
-    # 平均定位精度
-    # =========================
 
     accuracy_values = [
         _safe_float(
@@ -1784,10 +2196,6 @@ def analyze_movement(
         )
     )
 
-    # =========================
-    # 方向一致性
-    # =========================
-
     direction_consistency = 0.0
 
     if (
@@ -1820,10 +2228,8 @@ def analyze_movement(
             ):
                 continue
 
-            rad = (
-                math.radians(
-                    bearing
-                )
+            rad = math.radians(
+                bearing
             )
 
             vectors_x += (
@@ -1861,10 +2267,6 @@ def analyze_movement(
         )
     )
 
-    # =========================
-    # 最终方向
-    # =========================
-
     final_bearing = None
 
     if (
@@ -1890,10 +2292,6 @@ def analyze_movement(
             )
         )
 
-    # =========================
-    # Activity
-    # =========================
-
     activity_moving_states = (
         "walking",
         "running",
@@ -1910,19 +2308,6 @@ def analyze_movement(
         activity_state
         == "stationary"
     )
-
-    # =========================
-    # 移动证据等级
-    #
-    # 真移动应体现为：
-    #
-    # 有明显净位移
-    # +
-    # 有方向一致性
-    #
-    # 单纯累计路径大，
-    # 不再足以宣布 moving。
-    # =========================
 
     strong_net_movement = (
         effective_net_displacement
@@ -1959,15 +2344,7 @@ def analyze_movement(
         >= 70
     )
 
-    # =========================
-    # 最终融合判定
-    # =========================
-
     if activity_says_stationary:
-
-        # Activity 明确静止时，
-        # 必须有真正强的“离开原位置”证据
-        # 才能推翻 stationary。
 
         if (
             strong_net_movement
@@ -1999,10 +2376,6 @@ def analyze_movement(
                 confidence = "medium"
 
     elif activity_says_moving:
-
-        # Activity 明确移动。
-        # 即使 GPS 很差，也不应轻易否决，
-        # 但置信度会降低。
 
         if (
             strong_net_movement
@@ -2036,9 +2409,6 @@ def analyze_movement(
 
     else:
 
-        # Activity 未提供可靠结论时，
-        # 完全依赖空间证据。
-
         if (
             strong_net_movement
             and directional_movement_medium
@@ -2053,9 +2423,7 @@ def analyze_movement(
             trend = "moving"
             confidence = "medium"
 
-        elif (
-            location_quality == "poor"
-        ):
+        elif location_quality == "poor":
             trend = "uncertain"
             confidence = "low"
 
@@ -2063,20 +2431,12 @@ def analyze_movement(
             trend = "stable"
             confidence = "medium"
 
-    # =========================
-    # 返回
-    # =========================
-
     return {
         "available": True,
 
-        "trend": (
-            trend
-        ),
+        "trend": trend,
 
-        "confidence": (
-            confidence
-        ),
+        "confidence": confidence,
 
         "activity_state": (
             activity_state
@@ -2224,9 +2584,7 @@ def build_spatial_description(
         scene,
         str
     ):
-        primary_scene = (
-            scene
-        )
+        primary_scene = scene
 
     scene_map = {
         "transport_hub": (
