@@ -13,14 +13,13 @@ from reality import build_reality_context
 
 from spatial import (
     haversine_m,
-    bearing_deg,
-    bearing_label,
     convert_gps_to_amap,
     reverse_geocode,
     nearby_search,
     route as amap_route,
     classify_scene,
-    build_spatial_description
+    build_spatial_description,
+    analyze_movement
 )
 
 
@@ -59,7 +58,6 @@ FRESHNESS_THRESHOLDS = {
 }
 
 DEFAULT_FRESHNESS_SECONDS = 300
-
 PHONE_ACTIVITY_FRESH_SECONDS = 43200
 
 
@@ -107,9 +105,7 @@ def utc_now_epoch():
     )
 
 
-def epoch_to_iso(
-    epoch_value
-):
+def epoch_to_iso(epoch_value):
     if not isinstance(
         epoch_value,
         int
@@ -475,9 +471,7 @@ def run_housekeeping(
 def check_token():
     if not SENSE_TOKEN:
         return jsonify({
-            "error": (
-                "server_not_configured"
-            ),
+            "error": "server_not_configured",
             "message": (
                 "SENSE_TOKEN is not configured"
             )
@@ -946,15 +940,9 @@ def build_phone_activity_summary(
             )
 
         return {
-            "state": (
-                "inactive"
-            ),
-            "description": (
-                description
-            ),
-            "confidence": (
-                "high"
-            )
+            "state": "inactive",
+            "description": description,
+            "confidence": "high"
         }
 
     if (
@@ -969,9 +957,7 @@ def build_phone_activity_summary(
                 "手机屏幕已亮起，"
                 "但设备当前仍处于锁定状态。"
             ),
-            "confidence": (
-                "high"
-            )
+            "confidence": "high"
         }
 
     if (
@@ -1001,15 +987,9 @@ def build_phone_activity_summary(
             )
 
         return {
-            "state": (
-                "active"
-            ),
-            "description": (
-                description
-            ),
-            "confidence": (
-                "high"
-            )
+            "state": "active",
+            "description": description,
+            "confidence": "high"
         }
 
     return {
@@ -1017,9 +997,7 @@ def build_phone_activity_summary(
         "description": (
             "手机状态信息不完整。"
         ),
-        "confidence": (
-            "medium"
-        )
+        "confidence": "medium"
     }
 
 
@@ -1155,9 +1133,7 @@ def load_phone_activity():
             row["screen"]
         ),
 
-        "locked": (
-            locked
-        ),
+        "locked": locked,
 
         "screen_state_duration_seconds": (
             screen_duration[
@@ -1189,9 +1165,7 @@ def load_phone_activity():
             inactive_for_minutes
         ),
 
-        "current_app": (
-            current_app
-        ),
+        "current_app": current_app,
 
         "recent_apps": (
             build_recent_apps(
@@ -1269,15 +1243,11 @@ def latest_location_from_semantic(
         return None
 
     return {
-        "latitude": (
-            float(
-                latitude
-            )
+        "latitude": float(
+            latitude
         ),
-        "longitude": (
-            float(
-                longitude
-            )
+        "longitude": float(
+            longitude
         ),
         "accuracy_m": (
             location.get(
@@ -1290,6 +1260,26 @@ def latest_location_from_semantic(
             )
         )
     }
+
+
+def get_activity_state(
+    semantic
+):
+    activity = (
+        semantic.get(
+            "activity"
+        )
+    )
+
+    if not isinstance(
+        activity,
+        dict
+    ):
+        return None
+
+    return activity.get(
+        "state"
+    )
 
 
 def record_spatial_sample(
@@ -1337,8 +1327,12 @@ def record_spatial_sample(
 
         distance = (
             haversine_m(
-                last["latitude"],
-                last["longitude"],
+                last[
+                    "latitude"
+                ],
+                last[
+                    "longitude"
+                ],
                 latitude,
                 longitude
             )
@@ -1423,20 +1417,35 @@ def load_spatial_history(
     for row in rows:
         history.append({
             "latitude": (
-                row["latitude"]
+                row[
+                    "latitude"
+                ]
             ),
+
             "longitude": (
-                row["longitude"]
+                row[
+                    "longitude"
+                ]
             ),
+
             "accuracy_m": (
-                row["accuracy_m"]
+                row[
+                    "accuracy_m"
+                ]
             ),
+
             "speed_m_s": (
-                row["speed_m_s"]
+                row[
+                    "speed_m_s"
+                ]
             ),
+
             "recorded_at": (
-                row["recorded_at"]
+                row[
+                    "recorded_at"
+                ]
             ),
+
             "recorded_at_iso": (
                 epoch_to_iso(
                     row[
@@ -1558,20 +1567,24 @@ def build_place_relations(
                     "name"
                 )
             ),
+
             "kind": (
                 place.get(
                     "kind"
                 )
             ),
+
             "distance_m": (
                 round(
                     distance,
                     1
                 )
             ),
+
             "radius_m": (
                 radius_m
             ),
+
             "inside": (
                 distance
                 <= radius_m
@@ -1588,157 +1601,6 @@ def build_place_relations(
     )
 
     return relations
-
-
-def build_movement_summary(
-    history
-):
-    if (
-        not isinstance(
-            history,
-            list
-        )
-        or len(
-            history
-        ) < 2
-    ):
-        return {
-            "available": False,
-            "trend": (
-                "insufficient_history"
-            )
-        }
-
-    total_distance = 0.0
-
-    for (
-        first,
-        second
-    ) in zip(
-        history,
-        history[1:]
-    ):
-        segment = (
-            haversine_m(
-                first.get(
-                    "latitude"
-                ),
-                first.get(
-                    "longitude"
-                ),
-                second.get(
-                    "latitude"
-                ),
-                second.get(
-                    "longitude"
-                )
-            )
-        )
-
-        if segment is not None:
-            total_distance += (
-                segment
-            )
-
-    first = history[0]
-    last = history[-1]
-
-    net_distance = (
-        haversine_m(
-            first.get(
-                "latitude"
-            ),
-            first.get(
-                "longitude"
-            ),
-            last.get(
-                "latitude"
-            ),
-            last.get(
-                "longitude"
-            )
-        )
-    )
-
-    bearing = (
-        bearing_deg(
-            first.get(
-                "latitude"
-            ),
-            first.get(
-                "longitude"
-            ),
-            last.get(
-                "latitude"
-            ),
-            last.get(
-                "longitude"
-            )
-        )
-    )
-
-    duration_seconds = max(
-        0,
-        last.get(
-            "recorded_at",
-            0
-        )
-        - first.get(
-            "recorded_at",
-            0
-        )
-    )
-
-    if (
-        isinstance(
-            net_distance,
-            (int, float)
-        )
-        and net_distance < 50
-        and total_distance < 100
-    ):
-        trend = "stable"
-
-    else:
-        trend = "moving"
-
-    return {
-        "available": True,
-        "trend": (
-            trend
-        ),
-        "sample_count": (
-            len(
-                history
-            )
-        ),
-        "window_seconds": (
-            duration_seconds
-        ),
-        "total_path_distance_m": (
-            round(
-                total_distance,
-                1
-            )
-        ),
-        "net_displacement_m": (
-            round(
-                net_distance,
-                1
-            )
-            if net_distance
-            is not None
-            else None
-        ),
-        "bearing_deg": (
-            bearing
-        ),
-        "direction": (
-            bearing_label(
-                bearing
-            )
-        )
-    }
 
 
 def build_place_trends(
@@ -1828,26 +1690,29 @@ def build_place_trends(
                     "name"
                 )
             ),
+
             "kind": (
                 place.get(
                     "kind"
                 )
             ),
-            "trend": (
-                trend
-            ),
+
+            "trend": trend,
+
             "start_distance_m": (
                 round(
                     start_distance,
                     1
                 )
             ),
+
             "current_distance_m": (
                 round(
                     end_distance,
                     1
                 )
             ),
+
             "distance_change_m": (
                 round(
                     delta,
@@ -1882,9 +1747,11 @@ def build_spatial_context(
     if current is None:
         return {
             "available": False,
+
             "reason": (
                 "no_fresh_location"
             ),
+
             "provider": {
                 "name": "amap",
                 "available": bool(
@@ -1903,6 +1770,12 @@ def build_spatial_context(
         current[
             "longitude"
         ]
+    )
+
+    activity_state = (
+        get_activity_state(
+            semantic
+        )
     )
 
     places = (
@@ -1925,8 +1798,9 @@ def build_spatial_context(
     )
 
     movement = (
-        build_movement_summary(
-            history
+        analyze_movement(
+            history,
+            activity_state=activity_state
         )
     )
 
@@ -1944,17 +1818,21 @@ def build_spatial_context(
             "coordinate_system": (
                 "wgs84"
             ),
+
             "latitude": (
                 latitude
             ),
+
             "longitude": (
                 longitude
             ),
+
             "accuracy_m": (
                 current.get(
                     "accuracy_m"
                 )
             ),
+
             "speed_m_s": (
                 current.get(
                     "speed_m_s"
@@ -1963,9 +1841,7 @@ def build_spatial_context(
         },
 
         "provider": {
-            "name": (
-                "amap"
-            ),
+            "name": "amap",
             "available": bool(
                 AMAP_KEY
             )
@@ -2005,11 +1881,13 @@ def build_spatial_context(
             "coordinate_system": (
                 "gcj02"
             ),
+
             "latitude": (
                 converted[
                     "latitude"
                 ]
             ),
+
             "longitude": (
                 converted[
                     "longitude"
@@ -2066,7 +1944,15 @@ def build_spatial_context(
                 )
             )
 
-            if scene:
+            if (
+                isinstance(
+                    scene,
+                    dict
+                )
+                and scene.get(
+                    "primary_scene"
+                )
+            ):
                 spatial[
                     "scene"
                 ] = scene
@@ -2149,24 +2035,20 @@ def build_current_context():
     )
 
     return {
-        "sensors": (
-            sensors
-        ),
-        "semantic": (
-            semantic
-        ),
-        "weather": (
-            weather
-        ),
-        "spatial": (
-            spatial
-        ),
-        "reality": (
-            reality
-        ),
+        "sensors": sensors,
+
+        "semantic": semantic,
+
+        "weather": weather,
+
+        "spatial": spatial,
+
+        "reality": reality,
+
         "phone_activity": (
             phone_activity
         ),
+
         "phone_activity_summary": (
             phone_activity_summary
         )
@@ -2174,7 +2056,7 @@ def build_current_context():
 
 
 # =========================
-# 健康检查
+# Ping
 # =========================
 
 @app.route(
@@ -2194,9 +2076,8 @@ def ping():
         ),
 
         "spatial_provider": {
-            "name": (
-                "amap"
-            ),
+            "name": "amap",
+
             "configured": bool(
                 AMAP_KEY
             )
@@ -2227,26 +2108,32 @@ def receive_data():
         dict
     ):
         return jsonify({
-            "error": (
-                "invalid_json"
-            )
+            "error": "invalid_json"
         }), 400
 
-    message_id = data.get(
-        "messageId"
+    message_id = (
+        data.get(
+            "messageId"
+        )
     )
 
-    session_id = data.get(
-        "sessionId"
+    session_id = (
+        data.get(
+            "sessionId"
+        )
     )
 
-    device_id = data.get(
-        "deviceId"
+    device_id = (
+        data.get(
+            "deviceId"
+        )
     )
 
-    payload = data.get(
-        "payload",
-        []
+    payload = (
+        data.get(
+            "payload",
+            []
+        )
     )
 
     received_at = (
@@ -2319,8 +2206,7 @@ def receive_data():
                 continue
 
             old = conn.execute("""
-                SELECT
-                    sensor_time_ns
+                SELECT sensor_time_ns
 
                 FROM sensor_latest
 
@@ -2374,10 +2260,12 @@ def receive_data():
                 """, (
                     sensor_name,
                     sensor_time_ns,
+
                     json.dumps(
                         values,
                         ensure_ascii=False
                     ),
+
                     message_id,
                     session_id,
                     device_id,
@@ -2424,16 +2312,19 @@ def receive_data():
                                     latitude
                                 )
                             ),
+
                             "longitude": (
                                 float(
                                     longitude
                                 )
                             ),
+
                             "accuracy_m": (
                                 values.get(
                                     "horizontalAccuracy"
                                 )
                             ),
+
                             "speed_m_s": (
                                 values.get(
                                     "speed"
@@ -2444,22 +2335,27 @@ def receive_data():
     if location_sample:
         record_spatial_sample(
             conn,
+
             location_sample[
                 "latitude"
             ],
+
             location_sample[
                 "longitude"
             ],
+
             accuracy_m=(
                 location_sample.get(
                     "accuracy_m"
                 )
             ),
+
             speed_m_s=(
                 location_sample.get(
                     "speed_m_s"
                 )
             ),
+
             received_at=(
                 received_at
             )
@@ -2515,17 +2411,19 @@ def receive_phone_activity():
         dict
     ):
         return jsonify({
-            "error": (
-                "invalid_json"
-            )
+            "error": "invalid_json"
         }), 400
 
-    screen = data.get(
-        "screen"
+    screen = (
+        data.get(
+            "screen"
+        )
     )
 
-    locked = data.get(
-        "locked"
+    locked = (
+        data.get(
+            "locked"
+        )
     )
 
     last_interaction = (
@@ -2630,9 +2528,7 @@ def receive_phone_activity():
     event_type = "update"
 
     if old is None:
-        event_type = (
-            "initial"
-        )
+        event_type = "initial"
 
     elif (
         old["screen"]
@@ -2793,29 +2689,47 @@ def context():
 
     return jsonify({
         "status": "ok",
+
         "generated_at": (
             utc_now_iso()
         ),
+
         "sensors": (
-            current["sensors"]
+            current[
+                "sensors"
+            ]
         ),
+
         "semantic": (
-            current["semantic"]
+            current[
+                "semantic"
+            ]
         ),
+
         "weather": (
-            current["weather"]
+            current[
+                "weather"
+            ]
         ),
+
         "spatial": (
-            current["spatial"]
+            current[
+                "spatial"
+            ]
         ),
+
         "reality": (
-            current["reality"]
+            current[
+                "reality"
+            ]
         ),
+
         "phone_activity": (
             current[
                 "phone_activity"
             ]
         ),
+
         "phone_activity_summary": (
             current[
                 "phone_activity_summary"
@@ -2844,17 +2758,23 @@ def reality_context():
 
     return jsonify({
         "status": "ok",
+
         "generated_at": (
             utc_now_iso()
         ),
+
         "reality": (
-            current["reality"]
+            current[
+                "reality"
+            ]
         ),
+
         "phone_activity": (
             current[
                 "phone_activity"
             ]
         ),
+
         "phone_activity_summary": (
             current[
                 "phone_activity_summary"
@@ -2889,21 +2809,25 @@ def reality_summary():
 
     return jsonify({
         "status": "ok",
+
         "generated_at": (
             utc_now_iso()
         ),
+
         "summary": (
             reality.get(
                 "summary",
                 {}
             )
         ),
+
         "inferences": (
             reality.get(
                 "inferences",
                 {}
             )
         ),
+
         "phone_activity_summary": (
             current[
                 "phone_activity_summary"
@@ -2968,21 +2892,25 @@ def reality_environment():
 
     return jsonify({
         "status": "ok",
+
         "generated_at": (
             utc_now_iso()
         ),
+
         "environment": (
             reality.get(
                 "environment",
                 {}
             )
         ),
+
         "weather": (
             reality.get(
                 "weather",
                 {}
             )
         ),
+
         "summary": (
             relevant_summary
         )
@@ -3043,21 +2971,25 @@ def reality_device():
 
     return jsonify({
         "status": "ok",
+
         "generated_at": (
             utc_now_iso()
         ),
+
         "device": (
             reality.get(
                 "device",
                 {}
             )
         ),
+
         "network": (
             reality.get(
                 "network",
                 {}
             )
         ),
+
         "summary": (
             relevant_summary
         )
@@ -3137,7 +3069,7 @@ def reality_location():
 
 
 # =========================
-# Phone Activity Reality
+# Phone Reality
 # =========================
 
 @app.route(
@@ -3217,20 +3149,22 @@ def reality_phone_timeline():
 
     return jsonify({
         "status": "ok",
+
         "generated_at": (
             utc_now_iso()
         ),
+
         "window_minutes": (
             minutes
         ),
+
         "event_count": (
             len(
                 timeline
             )
         ),
-        "timeline": (
-            timeline
-        )
+
+        "timeline": timeline
     })
 
 
@@ -3266,12 +3200,12 @@ def reality_spatial():
 
     return jsonify({
         "status": "ok",
+
         "generated_at": (
             utc_now_iso()
         ),
-        "spatial": (
-            spatial
-        )
+
+        "spatial": spatial
     })
 
 
@@ -3315,9 +3249,26 @@ def reality_spatial_history():
         )
     )
 
+    sensors = (
+        load_latest_sensors()
+    )
+
+    semantic = (
+        build_semantic_context(
+            sensors
+        )
+    )
+
+    activity_state = (
+        get_activity_state(
+            semantic
+        )
+    )
+
     movement = (
-        build_movement_summary(
-            history
+        analyze_movement(
+            history,
+            activity_state=activity_state
         )
     )
 
@@ -3338,13 +3289,9 @@ def reality_spatial_history():
             )
         ),
 
-        "movement": (
-            movement
-        ),
+        "movement": movement,
 
-        "history": (
-            history
-        )
+        "history": history
     })
 
 
@@ -3372,12 +3319,12 @@ def reality_spatial_places():
 
         return jsonify({
             "status": "ok",
+
             "generated_at": (
                 utc_now_iso()
             ),
-            "places": (
-                places
-            )
+
+            "places": places
         })
 
     data = request.get_json(
@@ -3389,9 +3336,7 @@ def reality_spatial_places():
         dict
     ):
         return jsonify({
-            "error": (
-                "invalid_json"
-            )
+            "error": "invalid_json"
         }), 400
 
     name = str(
@@ -3456,6 +3401,16 @@ def reality_spatial_places():
         return jsonify({
             "error": (
                 "invalid_place_coordinates"
+            )
+        }), 400
+
+    if not (
+        -90 <= latitude <= 90
+        and -180 <= longitude <= 180
+    ):
+        return jsonify({
+            "error": (
+                "coordinates_out_of_range"
             )
         }), 400
 
@@ -3525,24 +3480,12 @@ def reality_spatial_places():
         "status": "ok",
 
         "place": {
-            "name": (
-                name
-            ),
-            "kind": (
-                kind
-            ),
-            "latitude": (
-                latitude
-            ),
-            "longitude": (
-                longitude
-            ),
-            "radius_m": (
-                radius_m
-            ),
-            "note": (
-                note
-            )
+            "name": name,
+            "kind": kind,
+            "latitude": latitude,
+            "longitude": longitude,
+            "radius_m": radius_m,
+            "note": note
         }
     }), 200
 
@@ -3586,12 +3529,12 @@ def reality_spatial_delete_place(
 
     return jsonify({
         "status": "ok",
+
         "deleted": (
             deleted > 0
         ),
-        "name": (
-            name
-        )
+
+        "name": name
     })
 
 
@@ -3653,9 +3596,7 @@ def reality_spatial_nearby():
     ):
         return jsonify({
             "status": "ok",
-            "nearby": (
-                converted
-            )
+            "nearby": converted
         })
 
     keywords = (
@@ -3698,12 +3639,12 @@ def reality_spatial_nearby():
 
     return jsonify({
         "status": "ok",
+
         "generated_at": (
             utc_now_iso()
         ),
-        "nearby": (
-            nearby
-        )
+
+        "nearby": nearby
     })
 
 
@@ -3780,9 +3721,8 @@ def reality_spatial_route():
                 "error": (
                     "personal_place_not_found"
                 ),
-                "place": (
-                    place_name
-                )
+
+                "place": place_name
             }), 404
 
         destination_latitude = (
@@ -3834,11 +3774,14 @@ def reality_spatial_route():
             current[
                 "latitude"
             ],
+
             current[
                 "longitude"
             ],
+
             destination_latitude,
             destination_longitude,
+
             mode=mode
         )
     )
@@ -3853,9 +3796,11 @@ def reality_spatial_route():
             current[
                 "latitude"
             ],
+
             current[
                 "longitude"
             ],
+
             destination_latitude,
             destination_longitude
         )
@@ -3880,9 +3825,7 @@ def reality_spatial_route():
             utc_now_iso()
         ),
 
-        "route": (
-            route_result
-        )
+        "route": route_result
     })
 
 
@@ -3939,15 +3882,9 @@ def reality_status():
         sensor_status[
             sensor_name
         ] = {
-            "freshness": (
-                freshness
-            ),
-            "age_seconds": (
-                age_seconds
-            ),
-            "updated_at": (
-                updated_at
-            )
+            "freshness": freshness,
+            "age_seconds": age_seconds,
+            "updated_at": updated_at
         }
 
         if freshness == "fresh":
@@ -4041,6 +3978,7 @@ def reality_status():
 
         "spatial_provider": {
             "name": "amap",
+
             "configured": bool(
                 AMAP_KEY
             )
@@ -4162,9 +4100,7 @@ def context_check():
         or token != SENSE_TOKEN
     ):
         return jsonify({
-            "error": (
-                "unauthorized"
-            )
+            "error": "unauthorized"
         }), 401
 
     current = (
@@ -4324,9 +4260,7 @@ def phone_timeline_check():
         or token != SENSE_TOKEN
     ):
         return jsonify({
-            "error": (
-                "unauthorized"
-            )
+            "error": "unauthorized"
         }), 401
 
     try:
@@ -4372,9 +4306,7 @@ def phone_timeline_check():
             )
         ),
 
-        "timeline": (
-            timeline
-        )
+        "timeline": timeline
     })
 
 
