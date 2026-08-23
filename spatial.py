@@ -6,8 +6,14 @@ from urllib.request import Request, urlopen
 from urllib.error import URLError, HTTPError
 
 
-AMAP_KEY = os.environ.get("AMAP_KEY", "").strip()
-AMAP_BASE = "https://restapi.amap.com"
+AMAP_KEY = os.environ.get(
+    "AMAP_KEY",
+    ""
+).strip()
+
+AMAP_BASE = (
+    "https://restapi.amap.com"
+)
 
 
 # =========================
@@ -33,6 +39,7 @@ def haversine_m(
 ):
     lat1 = _safe_float(lat1)
     lon1 = _safe_float(lon1)
+
     lat2 = _safe_float(lat2)
     lon2 = _safe_float(lon2)
 
@@ -46,8 +53,13 @@ def haversine_m(
 
     radius = 6371008.8
 
-    p1 = math.radians(lat1)
-    p2 = math.radians(lat2)
+    p1 = math.radians(
+        lat1
+    )
+
+    p2 = math.radians(
+        lat2
+    )
 
     dlat = math.radians(
         lat2 - lat1
@@ -75,7 +87,9 @@ def haversine_m(
         )
     )
 
-    return radius * c
+    return (
+        radius * c
+    )
 
 
 def bearing_deg(
@@ -86,6 +100,7 @@ def bearing_deg(
 ):
     lat1 = _safe_float(lat1)
     lon1 = _safe_float(lon1)
+
     lat2 = _safe_float(lat2)
     lon2 = _safe_float(lon2)
 
@@ -97,8 +112,13 @@ def bearing_deg(
     ):
         return None
 
-    p1 = math.radians(lat1)
-    p2 = math.radians(lat2)
+    p1 = math.radians(
+        lat1
+    )
+
+    p2 = math.radians(
+        lat2
+    )
 
     dlon = math.radians(
         lon2 - lon1
@@ -161,6 +181,67 @@ def bearing_label(
     ) % 8
 
     return labels[index]
+
+
+# =========================
+# GPS 数据质量
+# =========================
+
+def location_quality_from_accuracy(
+    accuracy_m
+):
+    accuracy_m = _safe_float(
+        accuracy_m
+    )
+
+    if accuracy_m is None:
+        return "unknown"
+
+    if accuracy_m <= 25:
+        return "good"
+
+    if accuracy_m <= 60:
+        return "usable"
+
+    if accuracy_m <= 100:
+        return "approximate"
+
+    return "poor"
+
+
+def segment_uncertainty_m(
+    first_accuracy,
+    second_accuracy
+):
+    first_accuracy = _safe_float(
+        first_accuracy
+    )
+
+    second_accuracy = _safe_float(
+        second_accuracy
+    )
+
+    accuracies = [
+        value
+        for value in (
+            first_accuracy,
+            second_accuracy
+        )
+        if value is not None
+    ]
+
+    if not accuracies:
+        return 30.0
+
+    average_accuracy = (
+        sum(accuracies)
+        / len(accuracies)
+    )
+
+    return max(
+        25.0,
+        average_accuracy * 1.15
+    )
 
 
 # =========================
@@ -268,11 +349,15 @@ def _amap_get(
             "reason": (
                 "provider_error"
             ),
-            "info": data.get(
-                "info"
+            "info": (
+                data.get(
+                    "info"
+                )
             ),
-            "infocode": data.get(
-                "infocode"
+            "infocode": (
+                data.get(
+                    "infocode"
+                )
             )
         }
 
@@ -497,9 +582,11 @@ def reverse_geocode(
     ):
         street_number = {}
 
-    roads = regeocode.get(
-        "roads",
-        []
+    roads = (
+        regeocode.get(
+            "roads",
+            []
+        )
     )
 
     if not isinstance(
@@ -508,9 +595,11 @@ def reverse_geocode(
     ):
         roads = []
 
-    pois = regeocode.get(
-        "pois",
-        []
+    pois = (
+        regeocode.get(
+            "pois",
+            []
+        )
     )
 
     if not isinstance(
@@ -530,23 +619,35 @@ def reverse_geocode(
             continue
 
         normalized_pois.append({
-            "id": poi.get(
-                "id"
+            "id": (
+                poi.get(
+                    "id"
+                )
             ),
-            "name": poi.get(
-                "name"
+            "name": (
+                poi.get(
+                    "name"
+                )
             ),
-            "type": poi.get(
-                "type"
+            "type": (
+                poi.get(
+                    "type"
+                )
             ),
-            "typecode": poi.get(
-                "typecode"
+            "typecode": (
+                poi.get(
+                    "typecode"
+                )
             ),
-            "address": poi.get(
-                "address"
+            "address": (
+                poi.get(
+                    "address"
+                )
             ),
-            "direction": poi.get(
-                "direction"
+            "direction": (
+                poi.get(
+                    "direction"
+                )
             ),
             "distance_m": (
                 _safe_float(
@@ -555,8 +656,10 @@ def reverse_geocode(
                     )
                 )
             ),
-            "location": poi.get(
-                "location"
+            "location": (
+                poi.get(
+                    "location"
+                )
             )
         })
 
@@ -781,20 +884,30 @@ def nearby_search(
             continue
 
         pois.append({
-            "id": poi.get(
-                "id"
+            "id": (
+                poi.get(
+                    "id"
+                )
             ),
-            "name": poi.get(
-                "name"
+            "name": (
+                poi.get(
+                    "name"
+                )
             ),
-            "type": poi.get(
-                "type"
+            "type": (
+                poi.get(
+                    "type"
+                )
             ),
-            "typecode": poi.get(
-                "typecode"
+            "typecode": (
+                poi.get(
+                    "typecode"
+                )
             ),
-            "address": poi.get(
-                "address"
+            "address": (
+                poi.get(
+                    "address"
+                )
             ),
             "distance_m": (
                 _safe_float(
@@ -803,25 +916,35 @@ def nearby_search(
                     )
                 )
             ),
-            "location": poi.get(
-                "location"
+            "location": (
+                poi.get(
+                    "location"
+                )
             ),
-            "province": poi.get(
-                "pname"
+            "province": (
+                poi.get(
+                    "pname"
+                )
             ),
-            "city": poi.get(
-                "cityname"
+            "city": (
+                poi.get(
+                    "cityname"
+                )
             ),
-            "district": poi.get(
-                "adname"
+            "district": (
+                poi.get(
+                    "adname"
+                )
             )
         })
 
     return {
         "available": True,
         "provider": "amap",
-        "count": len(
-            pois
+        "count": (
+            len(
+                pois
+            )
         ),
         "pois": pois
     }
@@ -879,27 +1002,34 @@ def _route_path(
         "walking": (
             "/v5/direction/walking"
         ),
+
         "driving": (
             "/v5/direction/driving"
         ),
+
         "cycling": (
             "/v5/direction/bicycling"
         ),
+
         "electrobike": (
             "/v5/direction/electrobike"
         )
     }
 
-    path = path_map.get(
-        mode
+    path = (
+        path_map.get(
+            mode
+        )
     )
 
     if path is None:
         return {
             "available": False,
+
             "reason": (
                 "unsupported_route_mode"
             ),
+
             "supported_modes": [
                 "walking",
                 "driving",
@@ -915,6 +1045,7 @@ def _route_path(
                 f"{origin_longitude:.6f},"
                 f"{origin_latitude:.6f}"
             ),
+
             "destination": (
                 f"{destination_longitude:.6f},"
                 f"{destination_latitude:.6f}"
@@ -927,18 +1058,22 @@ def _route_path(
     ):
         return result
 
-    data = result.get(
-        "data",
-        {}
+    data = (
+        result.get(
+            "data",
+            {}
+        )
     )
 
-    route = data.get(
-        "route",
-        {}
+    route_data = (
+        data.get(
+            "route",
+            {}
+        )
     )
 
     if not isinstance(
-        route,
+        route_data,
         dict
     ):
         return {
@@ -949,9 +1084,11 @@ def _route_path(
             )
         }
 
-    paths = route.get(
-        "paths",
-        []
+    paths = (
+        route_data.get(
+            "paths",
+            []
+        )
     )
 
     if not isinstance(
@@ -978,8 +1115,10 @@ def _route_path(
             )
         )
 
-        cost = item.get(
-            "cost"
+        cost = (
+            item.get(
+                "cost"
+            )
         )
 
         duration_s = None
@@ -1058,15 +1197,14 @@ def _route_path(
             )
         },
 
-        "paths": normalized
+        "paths": (
+            normalized
+        )
     }
 
 
 # =========================
 # 路线规划
-#
-# 输入为 GPS/WGS84
-# 内部转换为高德坐标
 # =========================
 
 def route(
@@ -1118,8 +1256,118 @@ def route(
 
 
 # =========================
-# 空间场景分类
+# POI 场景分类
+#
+# 不再使用“命中第一个类型”
+# 改为：
+#
+# POI 类型权重
+# ×
+# 距离权重
+#
+# 最终产生主场景 + 次级场景
 # =========================
+
+SCENE_RULES = {
+    "residential": {
+        "base_weight": 2.4,
+        "keywords": (
+            "商务住宅",
+            "住宅区",
+            "住宅小区",
+            "别墅"
+        )
+    },
+
+    "commercial": {
+        "base_weight": 1.4,
+        "keywords": (
+            "购物服务",
+            "餐饮服务",
+            "生活服务",
+            "商业"
+        )
+    },
+
+    "park_or_scenic": {
+        "base_weight": 1.3,
+        "keywords": (
+            "风景名胜",
+            "公园广场",
+            "公园",
+            "景点"
+        )
+    },
+
+    "education": {
+        "base_weight": 1.2,
+        "keywords": (
+            "科教文化服务",
+            "学校",
+            "幼儿园",
+            "大学",
+            "中学",
+            "小学"
+        )
+    },
+
+    "medical": {
+        "base_weight": 1.2,
+        "keywords": (
+            "医疗保健服务",
+            "医院",
+            "诊所"
+        )
+    },
+
+    "transport_hub": {
+        "base_weight": 1.7,
+        "keywords": (
+            "交通设施服务",
+            "火车站",
+            "机场",
+            "汽车站",
+            "地铁站",
+            "公交车站"
+        )
+    },
+
+    "lodging": {
+        "base_weight": 1.0,
+        "keywords": (
+            "住宿服务",
+            "宾馆酒店",
+            "酒店",
+            "旅馆"
+        )
+    }
+}
+
+
+def poi_distance_weight(
+    distance_m
+):
+    distance_m = _safe_float(
+        distance_m
+    )
+
+    if distance_m is None:
+        return 0.5
+
+    if distance_m <= 100:
+        return 1.0
+
+    if distance_m <= 250:
+        return 0.8
+
+    if distance_m <= 500:
+        return 0.6
+
+    if distance_m <= 1000:
+        return 0.4
+
+    return 0.2
+
 
 def classify_scene(
     nearby_pois
@@ -1128,94 +1376,619 @@ def classify_scene(
         nearby_pois,
         list
     ):
-        return None
+        return {
+            "primary_scene": None,
+            "secondary_scenes": [],
+            "scores": {}
+        }
 
-    text = " ".join(
-        str(
-            item.get(
+    scores = {
+        scene: 0.0
+        for scene
+        in SCENE_RULES
+    }
+
+    evidence_count = {
+        scene: 0
+        for scene
+        in SCENE_RULES
+    }
+
+    for poi in nearby_pois:
+
+        if not isinstance(
+            poi,
+            dict
+        ):
+            continue
+
+        poi_type = str(
+            poi.get(
                 "type",
                 ""
             )
         )
-        for item in nearby_pois
-        if isinstance(
-            item,
-            dict
+
+        distance_weight = (
+            poi_distance_weight(
+                poi.get(
+                    "distance_m"
+                )
+            )
         )
+
+        for (
+            scene,
+            rule
+        ) in SCENE_RULES.items():
+
+            if any(
+                keyword in poi_type
+                for keyword
+                in rule[
+                    "keywords"
+                ]
+            ):
+                score = (
+                    rule[
+                        "base_weight"
+                    ]
+                    * distance_weight
+                )
+
+                scores[
+                    scene
+                ] += score
+
+                evidence_count[
+                    scene
+                ] += 1
+
+    ranked = sorted(
+        scores.items(),
+        key=lambda item: (
+            item[1]
+        ),
+        reverse=True
     )
 
-    rules = [
-        (
-            "transport_hub",
-            (
-                "交通设施",
-                "火车站",
-                "机场",
-                "长途汽车站",
-                "地铁站"
-            )
-        ),
+    if (
+        not ranked
+        or ranked[0][1] <= 0
+    ):
+        return {
+            "primary_scene": None,
+            "secondary_scenes": [],
+            "scores": {},
+            "evidence_count": {}
+        }
 
-        (
-            "park_or_scenic",
-            (
-                "风景名胜",
-                "公园广场",
-                "公园"
-            )
-        ),
+    primary_scene = (
+        ranked[0][0]
+    )
 
-        (
-            "education",
-            (
-                "科教文化",
-                "学校"
-            )
-        ),
+    primary_score = (
+        ranked[0][1]
+    )
 
-        (
-            "medical",
-            (
-                "医疗保健",
-                "医院"
-            )
-        ),
-
-        (
-            "commercial",
-            (
-                "购物服务",
-                "餐饮服务",
-                "生活服务"
-            )
-        ),
-
-        (
-            "residential",
-            (
-                "商务住宅",
-                "住宅区"
-            )
-        )
-    ]
+    secondary_scenes = []
 
     for (
         scene,
-        keywords
-    ) in rules:
+        score
+    ) in ranked[1:]:
 
-        if any(
-            keyword in text
-            for keyword
-            in keywords
+        if score <= 0:
+            continue
+
+        if (
+            score
+            >= primary_score * 0.35
         ):
-            return scene
+            secondary_scenes.append(
+                scene
+            )
 
-    return None
+    positive_scores = {
+        scene: round(
+            score,
+            2
+        )
+        for (
+            scene,
+            score
+        ) in ranked
+        if score > 0
+    }
+
+    positive_evidence = {
+        scene: count
+        for (
+            scene,
+            count
+        ) in evidence_count.items()
+        if count > 0
+    }
+
+    if (
+        primary_score >= 4
+        and (
+            len(ranked) < 2
+            or ranked[1][1]
+            <= primary_score * 0.5
+        )
+    ):
+        confidence = "high"
+
+    elif primary_score >= 2:
+        confidence = "medium"
+
+    else:
+        confidence = "low"
+
+    return {
+        "primary_scene": (
+            primary_scene
+        ),
+
+        "secondary_scenes": (
+            secondary_scenes[:3]
+        ),
+
+        "confidence": (
+            confidence
+        ),
+
+        "scores": (
+            positive_scores
+        ),
+
+        "evidence_count": (
+            positive_evidence
+        )
+    }
 
 
 # =========================
-# 人类可读空间描述
+# GPS 运动分析
+#
+# 核心原则：
+#
+# 1. GPS 点之间的距离必须先扣除
+#    定位精度造成的不确定区间。
+#
+# 2. Activity=stationary 时，
+#    GPS 必须提供更强证据才能宣布移动。
+#
+# 3. GPS 精度很差时，
+#    宁愿输出 uncertain，
+#    也不制造虚假移动。
+# =========================
+
+def analyze_movement(
+    history,
+    activity_state=None
+):
+    if (
+        not isinstance(
+            history,
+            list
+        )
+        or len(
+            history
+        ) < 2
+    ):
+        return {
+            "available": False,
+            "trend": (
+                "insufficient_history"
+            )
+        }
+
+    raw_path_distance = 0.0
+    filtered_path_distance = 0.0
+    ignored_drift_distance = 0.0
+
+    valid_segment_count = 0
+    ignored_segment_count = 0
+
+    for (
+        first,
+        second
+    ) in zip(
+        history,
+        history[1:]
+    ):
+
+        segment = (
+            haversine_m(
+                first.get(
+                    "latitude"
+                ),
+                first.get(
+                    "longitude"
+                ),
+                second.get(
+                    "latitude"
+                ),
+                second.get(
+                    "longitude"
+                )
+            )
+        )
+
+        if segment is None:
+            continue
+
+        raw_path_distance += (
+            segment
+        )
+
+        uncertainty = (
+            segment_uncertainty_m(
+                first.get(
+                    "accuracy_m"
+                ),
+                second.get(
+                    "accuracy_m"
+                )
+            )
+        )
+
+        if segment <= uncertainty:
+            ignored_drift_distance += (
+                segment
+            )
+
+            ignored_segment_count += 1
+
+            continue
+
+        effective_distance = max(
+            0.0,
+            segment - uncertainty
+        )
+
+        if effective_distance <= 10:
+            ignored_drift_distance += (
+                segment
+            )
+
+            ignored_segment_count += 1
+
+            continue
+
+        filtered_path_distance += (
+            effective_distance
+        )
+
+        valid_segment_count += 1
+
+    first = (
+        history[0]
+    )
+
+    last = (
+        history[-1]
+    )
+
+    raw_net_displacement = (
+        haversine_m(
+            first.get(
+                "latitude"
+            ),
+            first.get(
+                "longitude"
+            ),
+            last.get(
+                "latitude"
+            ),
+            last.get(
+                "longitude"
+            )
+        )
+    )
+
+    first_accuracy = (
+        _safe_float(
+            first.get(
+                "accuracy_m"
+            )
+        )
+    )
+
+    last_accuracy = (
+        _safe_float(
+            last.get(
+                "accuracy_m"
+            )
+        )
+    )
+
+    endpoint_uncertainty = (
+        segment_uncertainty_m(
+            first_accuracy,
+            last_accuracy
+        )
+    )
+
+    if raw_net_displacement is None:
+        effective_net_displacement = (
+            None
+        )
+
+    else:
+        effective_net_displacement = max(
+            0.0,
+            raw_net_displacement
+            - endpoint_uncertainty
+        )
+
+    duration_seconds = max(
+        0,
+        last.get(
+            "recorded_at",
+            0
+        )
+        - first.get(
+            "recorded_at",
+            0
+        )
+    )
+
+    bearing = None
+
+    if (
+        effective_net_displacement
+        is not None
+        and effective_net_displacement
+        >= 30
+    ):
+        bearing = (
+            bearing_deg(
+                first.get(
+                    "latitude"
+                ),
+                first.get(
+                    "longitude"
+                ),
+                last.get(
+                    "latitude"
+                ),
+                last.get(
+                    "longitude"
+                )
+            )
+        )
+
+    accuracy_values = [
+        _safe_float(
+            point.get(
+                "accuracy_m"
+            )
+        )
+        for point in history
+    ]
+
+    accuracy_values = [
+        value
+        for value
+        in accuracy_values
+        if value is not None
+    ]
+
+    average_accuracy = None
+
+    if accuracy_values:
+        average_accuracy = (
+            sum(
+                accuracy_values
+            )
+            / len(
+                accuracy_values
+            )
+        )
+
+    location_quality = (
+        location_quality_from_accuracy(
+            average_accuracy
+        )
+    )
+
+    activity_moving_states = (
+        "walking",
+        "running",
+        "cycling",
+        "in_vehicle"
+    )
+
+    activity_says_moving = (
+        activity_state
+        in activity_moving_states
+    )
+
+    activity_says_stationary = (
+        activity_state
+        == "stationary"
+    )
+
+    # =========================
+    # 融合判定
+    # =========================
+
+    movement_evidence_strong = (
+        filtered_path_distance
+        >= 150
+        or (
+            effective_net_displacement
+            is not None
+            and effective_net_displacement
+            >= 100
+        )
+    )
+
+    movement_evidence_medium = (
+        filtered_path_distance
+        >= 60
+        or (
+            effective_net_displacement
+            is not None
+            and effective_net_displacement
+            >= 50
+        )
+    )
+
+    if activity_says_stationary:
+
+        if (
+            location_quality == "poor"
+            and not movement_evidence_strong
+        ):
+            trend = "stable"
+            confidence = "medium"
+
+        elif movement_evidence_strong:
+            trend = "moving"
+            confidence = "medium"
+
+        else:
+            trend = "stable"
+            confidence = "high"
+
+    elif activity_says_moving:
+
+        if movement_evidence_medium:
+            trend = "moving"
+            confidence = "high"
+
+        elif location_quality == "poor":
+            trend = "moving"
+            confidence = "medium"
+
+        else:
+            trend = "moving"
+            confidence = "medium"
+
+    else:
+
+        if movement_evidence_strong:
+            trend = "moving"
+            confidence = "high"
+
+        elif movement_evidence_medium:
+            trend = "moving"
+            confidence = "medium"
+
+        elif location_quality == "poor":
+            trend = "uncertain"
+            confidence = "low"
+
+        else:
+            trend = "stable"
+            confidence = "medium"
+
+    return {
+        "available": True,
+
+        "trend": (
+            trend
+        ),
+
+        "confidence": (
+            confidence
+        ),
+
+        "activity_state": (
+            activity_state
+        ),
+
+        "sample_count": (
+            len(
+                history
+            )
+        ),
+
+        "valid_segment_count": (
+            valid_segment_count
+        ),
+
+        "ignored_segment_count": (
+            ignored_segment_count
+        ),
+
+        "window_seconds": (
+            duration_seconds
+        ),
+
+        "location_quality": (
+            location_quality
+        ),
+
+        "average_accuracy_m": (
+            round(
+                average_accuracy,
+                1
+            )
+            if average_accuracy
+            is not None
+            else None
+        ),
+
+        "raw_path_distance_m": (
+            round(
+                raw_path_distance,
+                1
+            )
+        ),
+
+        "filtered_path_distance_m": (
+            round(
+                filtered_path_distance,
+                1
+            )
+        ),
+
+        "ignored_drift_distance_m": (
+            round(
+                ignored_drift_distance,
+                1
+            )
+        ),
+
+        "raw_net_displacement_m": (
+            round(
+                raw_net_displacement,
+                1
+            )
+            if raw_net_displacement
+            is not None
+            else None
+        ),
+
+        "effective_net_displacement_m": (
+            round(
+                effective_net_displacement,
+                1
+            )
+            if effective_net_displacement
+            is not None
+            else None
+        ),
+
+        "bearing_deg": (
+            bearing
+        ),
+
+        "direction": (
+            bearing_label(
+                bearing
+            )
+        )
+    }
+
+
+# =========================
+# 与个人地点关系
 # =========================
 
 def build_spatial_description(
@@ -1240,33 +2013,112 @@ def build_spatial_description(
                 f"当前位置约在{formatted}"
             )
 
+    primary_scene = None
+    secondary_scenes = []
+
+    if isinstance(
+        scene,
+        dict
+    ):
+        primary_scene = (
+            scene.get(
+                "primary_scene"
+            )
+        )
+
+        secondary_scenes = (
+            scene.get(
+                "secondary_scenes",
+                []
+            )
+        )
+
+    elif isinstance(
+        scene,
+        str
+    ):
+        primary_scene = (
+            scene
+        )
+
     scene_map = {
         "transport_hub": (
-            "周边具有明显的交通枢纽特征"
+            "周边具有明显的交通设施特征"
         ),
+
         "park_or_scenic": (
-            "周边以公园或景点设施为显著特征"
+            "周边公园或景观设施较明显"
         ),
+
         "education": (
             "周边教育文化设施较明显"
         ),
+
         "medical": (
             "周边医疗设施较明显"
         ),
+
         "commercial": (
-            "周边商业与生活服务设施较多"
+            "周边商业与生活服务设施较明显"
         ),
+
         "residential": (
-            "周边具有明显的住宅生活区特征"
+            "周边以住宅生活区为主要空间特征"
+        ),
+
+        "lodging": (
+            "周边住宿设施较明显"
         )
     }
 
-    if scene in scene_map:
+    if primary_scene in scene_map:
         parts.append(
             scene_map[
-                scene
+                primary_scene
             ]
         )
+
+    secondary_map = {
+        "commercial": (
+            "同时有一定商业生活设施"
+        ),
+
+        "park_or_scenic": (
+            "附近也有公园或景观设施"
+        ),
+
+        "education": (
+            "附近也有教育设施"
+        ),
+
+        "medical": (
+            "附近也有医疗设施"
+        ),
+
+        "transport_hub": (
+            "附近也有交通设施"
+        ),
+
+        "lodging": (
+            "附近也有住宿设施"
+        ),
+
+        "residential": (
+            "附近也有住宅设施"
+        )
+    }
+
+    if secondary_scenes:
+        secondary = (
+            secondary_scenes[0]
+        )
+
+        if secondary in secondary_map:
+            parts.append(
+                secondary_map[
+                    secondary
+                ]
+            )
 
     if isinstance(
         nearest_place,
