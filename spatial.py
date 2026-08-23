@@ -170,9 +170,7 @@ def bearing_label(degree):
 # =========================
 
 PI = math.pi
-
 A = 6378245.0
-
 EE = 0.00669342162296594323
 
 
@@ -180,10 +178,6 @@ def _out_of_china(
     latitude,
     longitude
 ):
-    """
-    GCJ-02 only applies inside mainland China.
-    """
-
     if longitude < 72.004:
         return True
 
@@ -331,16 +325,6 @@ def wgs84_to_gcj02_local(
     latitude,
     longitude
 ):
-    """
-    Local mathematical WGS84 -> GCJ02 conversion.
-
-    Amap API conversion remains the preferred path
-    for server-side current-location conversion.
-
-    This function is mainly used to support
-    GCJ02 -> WGS84 iterative inversion.
-    """
-
     latitude = _safe_float(
         latitude
     )
@@ -444,17 +428,6 @@ def gcj02_to_wgs84(
     latitude,
     longitude
 ):
-    """
-    Convert GCJ-02 coordinates to WGS84.
-
-    Uses iterative inversion of the standard
-    WGS84 -> GCJ02 transformation.
-
-    This is suitable for storing Amap POI
-    coordinates in the same coordinate system
-    as SensorLogger GPS.
-    """
-
     latitude = _safe_float(
         latitude
     )
@@ -544,15 +517,6 @@ def gcj02_to_wgs84(
 def parse_amap_location(
     location
 ):
-    """
-    Parse an Amap location string:
-
-    "116.123456,29.123456"
-
-    Amap order:
-    longitude, latitude
-    """
-
     if not isinstance(
         location,
         str
@@ -1455,19 +1419,27 @@ def _route_path(
             ]
         }
 
+    params = {
+        "origin": (
+            f"{origin_longitude:.6f},"
+            f"{origin_latitude:.6f}"
+        ),
+
+        "destination": (
+            f"{destination_longitude:.6f},"
+            f"{destination_latitude:.6f}"
+        ),
+
+        # V5 路线接口的 cost 属于扩展字段。
+        # driving 的 duration 位于 cost.duration。
+        # walking / cycling 带上它也没有副作用，
+        # 所以统一请求，保持接口行为一致。
+        "show_fields": "cost"
+    }
+
     result = _amap_get(
         path,
-        {
-            "origin": (
-                f"{origin_longitude:.6f},"
-                f"{origin_latitude:.6f}"
-            ),
-
-            "destination": (
-                f"{destination_longitude:.6f},"
-                f"{destination_latitude:.6f}"
-            )
-        }
+        params
     )
 
     if not result.get(
@@ -1631,14 +1603,6 @@ def route_amap_coordinates(
     destination_longitude,
     mode="walking"
 ):
-    """
-    Route when both coordinates are already GCJ-02.
-
-    Useful for:
-    - current location after Amap conversion
-    - Amap POI destination
-    """
-
     return _route_path(
         origin_latitude,
         origin_longitude,
