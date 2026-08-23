@@ -6,28 +6,23 @@ def build_reality_context(
     """
     Build a compact, stable reality layer for Xiaxia.
 
-    Structure:
+    Reality describes observable / derived reality.
 
-    Direct interpreted facts:
-    - user_state
-    - device
-    - environment
-    - network
-    - location
-    - weather
-    - spatial
+    It may include:
+    - interpreted sensor facts
+    - weather facts
+    - spatial facts
+    - conservative environmental context
 
-    summary:
-    - deterministic descriptions
-    - stable human-readable reality summaries
+    It must NOT infer:
+    - emotion
+    - intention
+    - desire
+    - need
+    - relationship meaning
+    - what Xiaxia should do
 
-    inferences:
-    - conservative contextual guesses
-    - explicit confidence
-    - no inference about emotion, intention, desire or need
-
-    Reality describes the world.
-    Xiaxia decides how to respond to it.
+    Those belong to Xiaxia.
     """
 
     reality = {
@@ -129,7 +124,7 @@ def build_reality_context(
         }
 
     # =========================
-    # 周围环境
+    # 环境
     # =========================
 
     light = semantic.get(
@@ -407,12 +402,13 @@ def build_reality_context(
             "spatial"
         ] = spatial
 
+    spatial_data = reality.get(
+        "spatial",
+        {}
+    )
+
     # =========================
-    # 基础移动状态
-    #
-    # 这一层只翻译 Activity。
-    # 后面会用 Spatial movement
-    # 做融合后的最终移动摘要。
+    # Activity Mobility
     # =========================
 
     activity_state = (
@@ -459,13 +455,8 @@ def build_reality_context(
         ] = activity_mobility
 
     # =========================
-    # Spatial 移动融合
+    # Spatial Movement
     # =========================
-
-    spatial_data = reality.get(
-        "spatial",
-        {}
-    )
 
     spatial_movement = {}
 
@@ -498,19 +489,6 @@ def build_reality_context(
             "confidence"
         )
     )
-
-    # =========================
-    # 最终 Mobility
-    #
-    # 优先级：
-    #
-    # 1. Spatial 高/中置信融合结果
-    # 2. Activity
-    # 3. uncertain
-    #
-    # Spatial 已经融合了 GPS accuracy
-    # 和 Activity，因此它更适合作为最终结论。
-    # =========================
 
     final_mobility = None
     final_mobility_confidence = None
@@ -607,7 +585,9 @@ def build_reality_context(
             "summary"
         ][
             "mobility_confidence"
-        ] = final_mobility_confidence
+        ] = (
+            final_mobility_confidence
+        )
 
     # =========================
     # 天气体感
@@ -722,18 +702,12 @@ def build_reality_context(
                     precipitation,
                     (int, float)
                 ):
-                    if (
-                        precipitation
-                        <= 0.5
-                    ):
+                    if precipitation <= 0.5:
                         rain_state = (
                             "light_rain"
                         )
 
-                    elif (
-                        precipitation
-                        <= 4
-                    ):
+                    elif precipitation <= 4:
                         rain_state = (
                             "rain"
                         )
@@ -941,7 +915,7 @@ def build_reality_context(
             ] = sound_state
 
     # =========================
-    # Spatial 场景
+    # Spatial Scene
     # =========================
 
     scene_data = (
@@ -1000,7 +974,7 @@ def build_reality_context(
             ] = scene_confidence
 
     # =========================
-    # Spatial 描述
+    # Spatial Description
     # =========================
 
     if isinstance(
@@ -1021,11 +995,11 @@ def build_reality_context(
             ] = spatial_description
 
     # =========================
-    # Spatial movement 摘要
+    # Spatial Movement 摘要
     # =========================
 
     if spatial_movement:
-        spatial_movement_summary = {
+        movement_summary = {
             "trend": (
                 spatial_movement.get(
                     "trend"
@@ -1044,15 +1018,21 @@ def build_reality_context(
                 )
             ),
 
+            "effective_net_displacement_m": (
+                spatial_movement.get(
+                    "effective_net_displacement_m"
+                )
+            ),
+
             "filtered_path_distance_m": (
                 spatial_movement.get(
                     "filtered_path_distance_m"
                 )
             ),
 
-            "effective_net_displacement_m": (
+            "direction_consistency": (
                 spatial_movement.get(
-                    "effective_net_displacement_m"
+                    "direction_consistency"
                 )
             ),
 
@@ -1072,9 +1052,42 @@ def build_reality_context(
             for (
                 key,
                 value
-            ) in spatial_movement_summary.items()
+            ) in movement_summary.items()
             if value is not None
         }
+
+    # =========================
+    # Personal Places
+    # =========================
+
+    personal_place_relations = []
+
+    if isinstance(
+        spatial_data,
+        dict
+    ):
+        relations = (
+            spatial_data.get(
+                "personal_place_relations"
+            )
+        )
+
+        if isinstance(
+            relations,
+            list
+        ):
+            personal_place_relations = (
+                relations
+            )
+
+    if personal_place_relations:
+        reality[
+            "summary"
+        ][
+            "personal_place_count"
+        ] = len(
+            personal_place_relations
+        )
 
     # =========================
     # 最近个人地点
@@ -1115,9 +1128,21 @@ def build_reality_context(
                 )
             ),
 
+            "radius_m": (
+                nearest_place.get(
+                    "radius_m"
+                )
+            ),
+
             "inside": (
                 nearest_place.get(
                     "inside"
+                )
+            ),
+
+            "status": (
+                nearest_place.get(
+                    "status"
                 )
             )
         }
@@ -1136,59 +1161,325 @@ def build_reality_context(
         }
 
     # =========================
-    # 个人地点趋势
+    # 当前所在 Personal Places
     # =========================
+
+    current_personal_places = []
 
     if isinstance(
         spatial_data,
         dict
     ):
-        place_trends = (
+        current_places = (
+            spatial_data.get(
+                "current_personal_places"
+            )
+        )
+
+        if isinstance(
+            current_places,
+            list
+        ):
+            current_personal_places = (
+                current_places
+            )
+
+    if current_personal_places:
+        normalized_current_places = []
+
+        for place in current_personal_places:
+            if not isinstance(
+                place,
+                dict
+            ):
+                continue
+
+            normalized_current_places.append({
+                "name": (
+                    place.get(
+                        "name"
+                    )
+                ),
+
+                "kind": (
+                    place.get(
+                        "kind"
+                    )
+                ),
+
+                "distance_m": (
+                    place.get(
+                        "distance_m"
+                    )
+                ),
+
+                "radius_m": (
+                    place.get(
+                        "radius_m"
+                    )
+                ),
+
+                "status": (
+                    place.get(
+                        "status"
+                    )
+                )
+            })
+
+        if normalized_current_places:
+            reality[
+                "summary"
+            ][
+                "current_personal_places"
+            ] = normalized_current_places
+
+    # =========================
+    # Personal Place Trends
+    # =========================
+
+    personal_place_trends = []
+
+    if isinstance(
+        spatial_data,
+        dict
+    ):
+        trends = (
             spatial_data.get(
                 "personal_place_trends"
             )
         )
 
         if isinstance(
-            place_trends,
+            trends,
             list
         ):
-            meaningful_trends = []
+            personal_place_trends = (
+                trends
+            )
 
-            for item in place_trends:
-                if not isinstance(
-                    item,
-                    dict
-                ):
-                    continue
+    meaningful_trends = []
 
-                trend = (
-                    item.get(
-                        "trend"
-                    )
+    for item in personal_place_trends:
+        if not isinstance(
+            item,
+            dict
+        ):
+            continue
+
+        trend = (
+            item.get(
+                "trend"
+            )
+        )
+
+        if trend not in (
+            "entered",
+            "left",
+            "approaching",
+            "moving_away",
+            "inside"
+        ):
+            continue
+
+        normalized = {
+            "name": (
+                item.get(
+                    "name"
                 )
+            ),
 
-                if trend not in (
-                    "approaching",
-                    "moving_away"
-                ):
-                    continue
-
-                meaningful_trends.append(
-                    item
+            "kind": (
+                item.get(
+                    "kind"
                 )
+            ),
 
-            if meaningful_trends:
-                reality[
-                    "summary"
-                ][
-                    "personal_place_trends"
-                ] = meaningful_trends[
-                    :5
-                ]
+            "trend": trend,
+
+            "current_distance_m": (
+                item.get(
+                    "current_distance_m"
+                )
+            ),
+
+            "distance_change_m": (
+                item.get(
+                    "distance_change_m"
+                )
+            ),
+
+            "current_inside": (
+                item.get(
+                    "current_inside"
+                )
+            ),
+
+            "entered_at": (
+                item.get(
+                    "entered_at"
+                )
+            ),
+
+            "left_at": (
+                item.get(
+                    "left_at"
+                )
+            )
+        }
+
+        meaningful_trends.append({
+            key: value
+            for (
+                key,
+                value
+            ) in normalized.items()
+            if value is not None
+        })
+
+    if meaningful_trends:
+        reality[
+            "summary"
+        ][
+            "personal_place_trends"
+        ] = meaningful_trends[
+            :10
+        ]
 
     # =========================
-    # 人类可理解的现实描述
+    # 当前空间关系文本
+    # =========================
+
+    personal_place_description_parts = []
+
+    if current_personal_places:
+        place_names = [
+            place.get(
+                "name"
+            )
+            for place in current_personal_places
+            if isinstance(
+                place,
+                dict
+            )
+            and place.get(
+                "name"
+            )
+        ]
+
+        if place_names:
+            if len(
+                place_names
+            ) == 1:
+                personal_place_description_parts.append(
+                    f"当前位于个人地点“{place_names[0]}”范围内"
+                )
+
+            else:
+                joined_names = "、".join(
+                    f"“{name}”"
+                    for name in place_names
+                )
+
+                personal_place_description_parts.append(
+                    f"当前同时位于个人地点{joined_names}的范围内"
+                )
+
+    elif isinstance(
+        nearest_place,
+        dict
+    ):
+        nearest_name = (
+            nearest_place.get(
+                "name"
+            )
+        )
+
+        nearest_distance = (
+            nearest_place.get(
+                "distance_m"
+            )
+        )
+
+        nearest_status = (
+            nearest_place.get(
+                "status"
+            )
+        )
+
+        if (
+            nearest_name
+            and isinstance(
+                nearest_distance,
+                (int, float)
+            )
+        ):
+            if nearest_status == "nearby":
+                personal_place_description_parts.append(
+                    f"当前在个人地点“{nearest_name}”附近，"
+                    f"直线距离约{round(nearest_distance)}米"
+                )
+
+            elif nearest_status == "away":
+                personal_place_description_parts.append(
+                    f"当前距离最近的个人地点“{nearest_name}”"
+                    f"约{round(nearest_distance)}米"
+                )
+
+    if meaningful_trends:
+        for item in meaningful_trends[:3]:
+            trend = (
+                item.get(
+                    "trend"
+                )
+            )
+
+            name = (
+                item.get(
+                    "name"
+                )
+            )
+
+            if not name:
+                continue
+
+            if trend == "entered":
+                personal_place_description_parts.append(
+                    f"最近进入了个人地点“{name}”的范围"
+                )
+
+            elif trend == "left":
+                personal_place_description_parts.append(
+                    f"最近离开了个人地点“{name}”的范围"
+                )
+
+            elif trend == "approaching":
+                personal_place_description_parts.append(
+                    f"最近与个人地点“{name}”的距离在缩短"
+                )
+
+            elif trend == "moving_away":
+                personal_place_description_parts.append(
+                    f"最近与个人地点“{name}”的距离在增加"
+                )
+
+    if personal_place_description_parts:
+        personal_place_description = (
+            "；".join(
+                personal_place_description_parts
+            )
+            + "。"
+        )
+
+        reality[
+            "summary"
+        ][
+            "personal_place_description"
+        ] = (
+            personal_place_description
+        )
+
+    # =========================
+    # 人类可读描述
     # =========================
 
     descriptions = []
@@ -1451,7 +1742,9 @@ def build_reality_context(
             "summary"
         ][
             "surroundings_description"
-        ] = surroundings_description
+        ] = (
+            surroundings_description
+        )
 
         descriptions.append(
             surroundings_description.rstrip(
@@ -1459,7 +1752,7 @@ def build_reality_context(
             )
         )
 
-    # ---------- 融合后的移动描述 ----------
+    # ---------- 移动 ----------
 
     mobility = (
         reality[
@@ -1668,6 +1961,23 @@ def build_reality_context(
             )
         )
 
+    # ---------- Personal Places ----------
+
+    personal_place_description = (
+        reality[
+            "summary"
+        ].get(
+            "personal_place_description"
+        )
+    )
+
+    if personal_place_description:
+        descriptions.append(
+            personal_place_description.rstrip(
+                "。"
+            )
+        )
+
     # ---------- 综合 ----------
 
     if descriptions:
@@ -1683,7 +1993,7 @@ def build_reality_context(
         )
 
     # =========================
-    # 保守情境推断
+    # 保守环境推断
     # =========================
 
     inference_contexts = []
@@ -1720,7 +2030,7 @@ def build_reality_context(
         )
     )
 
-    # ---------- 可能的休息环境 ----------
+    # ---------- 休息环境 ----------
 
     if (
         mobility == "not_moving"
@@ -1749,7 +2059,7 @@ def build_reality_context(
             ]
         })
 
-    # ---------- 可能的移动环境 ----------
+    # ---------- 移动环境 ----------
 
     location_data = reality.get(
         "location",
@@ -1809,7 +2119,7 @@ def build_reality_context(
             ]
         })
 
-    # ---------- 雨天环境 ----------
+    # ---------- 雨天 ----------
 
     if precipitation in (
         "light_rain",
@@ -1830,11 +2140,7 @@ def build_reality_context(
             ]
         })
 
-    # ---------- 空间环境 ----------
-    #
-    # 这是对 POI 分布的空间描述，
-    # 不是对用户行为的推断。
-    # ----------
+    # ---------- Spatial Scene ----------
 
     primary_scene = (
         reality[
@@ -1874,6 +2180,41 @@ def build_reality_context(
             ]
         })
 
+    # ---------- Personal Place ----------
+    #
+    # 这里只声明空间事实，
+    # 不声明用户意图。
+    # ----------
+
+    if current_personal_places:
+        for place in current_personal_places[:3]:
+            if not isinstance(
+                place,
+                dict
+            ):
+                continue
+
+            place_name = (
+                place.get(
+                    "name"
+                )
+            )
+
+            if place_name:
+                inference_contexts.append({
+                    "value": (
+                        "inside_personal_place"
+                    ),
+
+                    "confidence": (
+                        "high"
+                    ),
+
+                    "basis": [
+                        f"place:{place_name}"
+                    ]
+                })
+
     if inference_contexts:
         reality[
             "inferences"
@@ -1882,7 +2223,7 @@ def build_reality_context(
         ] = inference_contexts
 
     # =========================
-    # 位置数据质量
+    # Location Quality
     # =========================
 
     accuracy = (
