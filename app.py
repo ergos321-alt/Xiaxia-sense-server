@@ -17,6 +17,9 @@ from spatial import (
     reverse_geocode,
     nearby_search,
     route as amap_route,
+    route_amap_coordinates,
+    parse_amap_location,
+    gcj02_to_wgs84,
     classify_scene,
     build_spatial_description,
     analyze_movement
@@ -58,7 +61,10 @@ FRESHNESS_THRESHOLDS = {
 }
 
 DEFAULT_FRESHNESS_SECONDS = 300
-PHONE_ACTIVITY_FRESH_SECONDS = 43200
+
+PHONE_ACTIVITY_FRESH_SECONDS = (
+    12 * 60 * 60
+)
 
 
 # =========================
@@ -105,7 +111,9 @@ def utc_now_epoch():
     )
 
 
-def epoch_to_iso(epoch_value):
+def epoch_to_iso(
+    epoch_value
+):
     if not isinstance(
         epoch_value,
         int
@@ -123,7 +131,7 @@ def epoch_to_iso(epoch_value):
 
 
 # =========================
-# 新鲜度
+# Freshness
 # =========================
 
 def freshness_info(
@@ -161,6 +169,7 @@ def freshness_info(
 
         return {
             "age_seconds": age_seconds,
+
             "freshness": (
                 "fresh"
                 if age_seconds <= threshold
@@ -202,6 +211,7 @@ def phone_freshness_info(
 
         return {
             "age_seconds": age_seconds,
+
             "freshness": (
                 "fresh"
                 if age_seconds
@@ -227,7 +237,9 @@ class DatabaseConnection:
         self,
         connection
     ):
-        self.connection = connection
+        self.connection = (
+            connection
+        )
 
     def execute(
         self,
@@ -249,13 +261,19 @@ class DatabaseConnection:
             params
         )
 
-    def commit(self):
+    def commit(
+        self
+    ):
         self.connection.commit()
 
-    def rollback(self):
+    def rollback(
+        self
+    ):
         self.connection.rollback()
 
-    def close(self):
+    def close(
+        self
+    ):
         self.connection.close()
 
 
@@ -423,7 +441,8 @@ def run_housekeeping(
             timezone.utc
         )
         - timedelta(
-            seconds=MESSAGE_RETENTION_SECONDS
+            seconds=
+            MESSAGE_RETENTION_SECONDS
         )
     ).isoformat()
 
@@ -470,7 +489,10 @@ def run_housekeeping(
 def check_token():
     if not SENSE_TOKEN:
         return jsonify({
-            "error": "server_not_configured",
+            "error": (
+                "server_not_configured"
+            ),
+
             "message": (
                 "SENSE_TOKEN is not configured"
             )
@@ -523,17 +545,25 @@ def load_latest_sensors():
 
     for row in rows:
         sensor_name = (
-            row["sensor_name"]
+            row[
+                "sensor_name"
+            ]
         )
 
-        freshness = freshness_info(
-            sensor_name,
-            row["updated_at"]
+        freshness = (
+            freshness_info(
+                sensor_name,
+                row[
+                    "updated_at"
+                ]
+            )
         )
 
         try:
             values = json.loads(
-                row["values_json"]
+                row[
+                    "values_json"
+                ]
             )
 
         except Exception:
@@ -547,17 +577,21 @@ def load_latest_sensors():
                     "sensor_time_ns"
                 ]
             ),
+
             "values": values,
+
             "updated_at": (
                 row[
                     "updated_at"
                 ]
             ),
+
             "age_seconds": (
                 freshness[
                     "age_seconds"
                 ]
             ),
+
             "freshness": (
                 freshness[
                     "freshness"
@@ -613,7 +647,9 @@ def load_recent_phone_events(
 
     for row in rows:
         locked_value = (
-            row["locked"]
+            row[
+                "locked"
+            ]
         )
 
         if locked_value == "true":
@@ -627,28 +663,49 @@ def load_recent_phone_events(
 
         events.append({
             "event_type": (
-                row["event_type"]
+                row[
+                    "event_type"
+                ]
             ),
+
             "screen": (
-                row["screen"]
+                row[
+                    "screen"
+                ]
             ),
+
             "locked": locked,
+
             "app_name": (
-                row["app_name"]
+                row[
+                    "app_name"
+                ]
             ),
+
             "app_package": (
-                row["app_package"]
+                row[
+                    "app_package"
+                ]
             ),
+
             "event_time": (
-                row["event_time"]
+                row[
+                    "event_time"
+                ]
             ),
+
             "event_at": (
                 epoch_to_iso(
-                    row["event_time"]
+                    row[
+                        "event_time"
+                    ]
                 )
             ),
+
             "received_at": (
-                row["received_at"]
+                row[
+                    "received_at"
+                ]
             )
         })
 
@@ -700,7 +757,9 @@ def get_screen_state_duration(
     seconds = max(
         0,
         utc_now_epoch()
-        - row["event_time"]
+        - row[
+            "event_time"
+        ]
     )
 
     return {
@@ -727,14 +786,17 @@ def build_phone_timeline(
     for event in reversed(
         raw_events
     ):
-        event_type = event.get(
-            "event_type"
+        event_type = (
+            event.get(
+                "event_type"
+            )
         )
 
         item = {
             "event": (
                 event_type
             ),
+
             "at": (
                 event.get(
                     "event_at"
@@ -742,8 +804,9 @@ def build_phone_timeline(
             )
         }
 
-        if event_type == (
-            "app_changed"
+        if (
+            event_type
+            == "app_changed"
         ):
             item[
                 "app_name"
@@ -830,8 +893,14 @@ def build_recent_apps(
         )
 
         recent_apps.append({
-            "app_name": app_name,
-            "package_name": package_name,
+            "app_name": (
+                app_name
+            ),
+
+            "package_name": (
+                package_name
+            ),
+
             "last_seen_at": (
                 event.get(
                     "event_at"
@@ -856,10 +925,14 @@ def build_phone_activity_summary(
     if not phone_activity:
         return {
             "state": "unknown",
+
             "description": (
                 "当前没有可用的手机活动数据。"
             ),
-            "confidence": "low"
+
+            "confidence": (
+                "low"
+            )
         }
 
     screen = (
@@ -907,12 +980,18 @@ def build_phone_activity_summary(
 
     if freshness != "fresh":
         return {
-            "state": "unknown",
+            "state": (
+                "unknown"
+            ),
+
             "description": (
                 "手机活动数据已经过期，"
                 "无法可靠描述当前状态。"
             ),
-            "confidence": "low"
+
+            "confidence": (
+                "low"
+            )
         }
 
     if (
@@ -948,11 +1027,15 @@ def build_phone_activity_summary(
             "state": (
                 "screen_on_locked"
             ),
+
             "description": (
                 "手机屏幕已亮起，"
                 "但设备当前仍处于锁定状态。"
             ),
-            "confidence": "high"
+
+            "confidence": (
+                "high"
+            )
         }
 
     if (
@@ -989,9 +1072,11 @@ def build_phone_activity_summary(
 
     return {
         "state": "unknown",
+
         "description": (
             "手机状态信息不完整。"
         ),
+
         "confidence": "medium"
     }
 
@@ -1021,7 +1106,9 @@ def load_phone_activity():
 
     freshness = (
         phone_freshness_info(
-            row["updated_at"]
+            row[
+                "updated_at"
+            ]
         )
     )
 
@@ -1078,7 +1165,9 @@ def load_phone_activity():
         )
 
     locked_value = (
-        row["locked"]
+        row[
+            "locked"
+        ]
     )
 
     if locked_value == "true":
@@ -1092,32 +1181,46 @@ def load_phone_activity():
 
     screen_duration = (
         get_screen_state_duration(
-            row["screen"]
+            row[
+                "screen"
+            ]
         )
     )
 
     current_app = None
 
     if (
-        row["screen"] == "on"
+        row[
+            "screen"
+        ] == "on"
         and locked is False
-        and row["app_name"]
+        and row[
+            "app_name"
+        ]
     ):
         current_app = {
             "app_name": (
-                row["app_name"]
+                row[
+                    "app_name"
+                ]
             ),
+
             "package_name": (
-                row["app_package"]
+                row[
+                    "app_package"
+                ]
             ),
+
             "started_at": (
                 epoch_to_iso(
                     app_since
                 )
             ),
+
             "duration_seconds": (
                 app_duration_seconds
             ),
+
             "duration_minutes": (
                 app_duration_minutes
             )
@@ -1125,7 +1228,9 @@ def load_phone_activity():
 
     return {
         "screen": (
-            row["screen"]
+            row[
+                "screen"
+            ]
         ),
 
         "locked": locked,
@@ -1160,7 +1265,9 @@ def load_phone_activity():
             inactive_for_minutes
         ),
 
-        "current_app": current_app,
+        "current_app": (
+            current_app
+        ),
 
         "recent_apps": (
             build_recent_apps(
@@ -1177,7 +1284,9 @@ def load_phone_activity():
         ),
 
         "last_updated": (
-            row["updated_at"]
+            row[
+                "updated_at"
+            ]
         ),
 
         "age_seconds": (
@@ -1195,7 +1304,7 @@ def load_phone_activity():
 
 
 # =========================
-# Spatial Reality
+# Spatial 基础
 # =========================
 
 def latest_location_from_semantic(
@@ -1238,12 +1347,16 @@ def latest_location_from_semantic(
         return None
 
     return {
-        "latitude": float(
-            latitude
+        "latitude": (
+            float(
+                latitude
+            )
         ),
 
-        "longitude": float(
-            longitude
+        "longitude": (
+            float(
+                longitude
+            )
         ),
 
         "accuracy_m": (
@@ -1279,6 +1392,10 @@ def get_activity_state(
         "state"
     )
 
+
+# =========================
+# Spatial History
+# =========================
 
 def record_spatial_sample(
     conn,
@@ -1590,6 +1707,186 @@ def find_personal_place(
     return dict(row)
 
 
+def save_personal_place(
+    name,
+    kind,
+    latitude,
+    longitude,
+    radius_m=150,
+    note=None
+):
+    name = str(
+        name or ""
+    ).strip()
+
+    if not name:
+        return {
+            "ok": False,
+            "error": (
+                "name_required"
+            )
+        }
+
+    try:
+        latitude = float(
+            latitude
+        )
+
+        longitude = float(
+            longitude
+        )
+
+        radius_m = float(
+            radius_m
+        )
+
+    except Exception:
+        return {
+            "ok": False,
+
+            "error": (
+                "invalid_place_coordinates"
+            )
+        }
+
+    if not (
+        -90 <= latitude <= 90
+        and -180 <= longitude <= 180
+    ):
+        return {
+            "ok": False,
+
+            "error": (
+                "coordinates_out_of_range"
+            )
+        }
+
+    radius_m = max(
+        20,
+        min(
+            radius_m,
+            5000
+        )
+    )
+
+    kind = (
+        normalize_place_kind(
+            kind
+        )
+    )
+
+    if note is not None:
+        note = str(
+            note
+        ).strip()
+
+        if not note:
+            note = None
+
+    now = utc_now_iso()
+
+    conn = get_db()
+
+    existing = conn.execute("""
+        SELECT created_at
+
+        FROM personal_places
+
+        WHERE lower(name)
+            = lower(?)
+
+        LIMIT 1
+    """, (
+        name,
+    )).fetchone()
+
+    if existing is None:
+        created_at = (
+            now
+        )
+
+    else:
+        created_at = (
+            existing[
+                "created_at"
+            ]
+        )
+
+        conn.execute("""
+            DELETE FROM personal_places
+
+            WHERE lower(name)
+                = lower(?)
+        """, (
+            name,
+        ))
+
+    conn.execute("""
+        INSERT INTO personal_places (
+            name,
+            kind,
+            latitude,
+            longitude,
+            radius_m,
+            note,
+            created_at,
+            updated_at
+        )
+
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        name,
+        kind,
+        latitude,
+        longitude,
+        radius_m,
+        note,
+        created_at,
+        now
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return {
+        "ok": True,
+
+        "place": {
+            "name": name,
+
+            "kind": kind,
+
+            "latitude": (
+                latitude
+            ),
+
+            "longitude": (
+                longitude
+            ),
+
+            "coordinate_system": (
+                "wgs84"
+            ),
+
+            "radius_m": (
+                radius_m
+            ),
+
+            "note": (
+                note
+            ),
+
+            "created_at": (
+                created_at
+            ),
+
+            "updated_at": (
+                now
+            )
+        }
+    }
+
+
 def place_distance_status(
     distance_m,
     radius_m
@@ -1739,9 +2036,6 @@ def build_place_trends(
 
     trends = []
 
-    start_point = history[0]
-    end_point = history[-1]
-
     for place in places:
         if not isinstance(
             place,
@@ -1793,7 +2087,10 @@ def build_place_trends(
                 continue
 
             distances.append({
-                "distance_m": distance,
+                "distance_m": (
+                    distance
+                ),
+
                 "recorded_at": (
                     point.get(
                         "recorded_at"
@@ -1830,14 +2127,12 @@ def build_place_trends(
 
         entered = False
         left = False
+
         first_entered_at = None
         first_left_at = None
 
         previous_inside = (
-            distances[0][
-                "distance_m"
-            ]
-            <= radius_m
+            start_inside
         )
 
         for sample in distances[1:]:
@@ -1889,10 +2184,16 @@ def build_place_trends(
             - start_distance
         )
 
-        if entered and current_inside:
+        if (
+            entered
+            and current_inside
+        ):
             trend = "entered"
 
-        elif left and not current_inside:
+        elif (
+            left
+            and not current_inside
+        ):
             trend = "left"
 
         elif (
@@ -2013,160 +2314,6 @@ def build_place_trends(
     return trends
 
 
-def save_personal_place(
-    name,
-    kind,
-    latitude,
-    longitude,
-    radius_m=150,
-    note=None
-):
-    name = str(
-        name or ""
-    ).strip()
-
-    if not name:
-        return {
-            "ok": False,
-            "error": (
-                "name_required"
-            )
-        }
-
-    try:
-        latitude = float(
-            latitude
-        )
-
-        longitude = float(
-            longitude
-        )
-
-        radius_m = float(
-            radius_m
-        )
-
-    except Exception:
-        return {
-            "ok": False,
-            "error": (
-                "invalid_place_coordinates"
-            )
-        }
-
-    if not (
-        -90 <= latitude <= 90
-        and -180 <= longitude <= 180
-    ):
-        return {
-            "ok": False,
-            "error": (
-                "coordinates_out_of_range"
-            )
-        }
-
-    radius_m = max(
-        20,
-        min(
-            radius_m,
-            5000
-        )
-    )
-
-    kind = normalize_place_kind(
-        kind
-    )
-
-    if note is not None:
-        note = str(
-            note
-        ).strip()
-
-        if not note:
-            note = None
-
-    now = utc_now_iso()
-
-    conn = get_db()
-
-    existing = conn.execute("""
-        SELECT created_at
-
-        FROM personal_places
-
-        WHERE lower(name)
-            = lower(?)
-
-        LIMIT 1
-    """, (
-        name,
-    )).fetchone()
-
-    if existing is None:
-        created_at = now
-
-    else:
-        created_at = (
-            existing[
-                "created_at"
-            ]
-        )
-
-        conn.execute("""
-            DELETE FROM personal_places
-
-            WHERE lower(name)
-                = lower(?)
-        """, (
-            name,
-        ))
-
-    conn.execute("""
-        INSERT INTO personal_places (
-            name,
-            kind,
-            latitude,
-            longitude,
-            radius_m,
-            note,
-            created_at,
-            updated_at
-        )
-
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        name,
-        kind,
-        latitude,
-        longitude,
-        radius_m,
-        note,
-        created_at,
-        now
-    ))
-
-    conn.commit()
-    conn.close()
-
-    return {
-        "ok": True,
-
-        "place": {
-            "name": name,
-            "kind": kind,
-            "latitude": latitude,
-            "longitude": longitude,
-            "coordinate_system": (
-                "wgs84"
-            ),
-            "radius_m": radius_m,
-            "note": note,
-            "created_at": created_at,
-            "updated_at": now
-        }
-    }
-
-
 # =========================
 # Spatial Context
 # =========================
@@ -2190,9 +2337,14 @@ def build_spatial_context(
             ),
 
             "provider": {
-                "name": "amap",
-                "available": bool(
-                    AMAP_KEY
+                "name": (
+                    "amap"
+                ),
+
+                "available": (
+                    bool(
+                        AMAP_KEY
+                    )
                 )
             }
         }
@@ -2279,8 +2431,11 @@ def build_spatial_context(
 
         "provider": {
             "name": "amap",
-            "available": bool(
-                AMAP_KEY
+
+            "available": (
+                bool(
+                    AMAP_KEY
+                )
             )
         },
 
@@ -2400,9 +2555,9 @@ def build_spatial_context(
 
             spatial[
                 "nearby_pois"
-            ] = nearby_pois[
-                :12
-            ]
+            ] = (
+                nearby_pois[:12]
+            )
 
             scene = (
                 classify_scene(
@@ -2506,9 +2661,11 @@ def build_current_context():
         "weather": weather,
         "spatial": spatial,
         "reality": reality,
+
         "phone_activity": (
             phone_activity
         ),
+
         "phone_activity_summary": (
             phone_activity_summary
         )
@@ -2538,8 +2695,10 @@ def ping():
         "spatial_provider": {
             "name": "amap",
 
-            "configured": bool(
-                AMAP_KEY
+            "configured": (
+                bool(
+                    AMAP_KEY
+                )
             )
         }
     })
@@ -2985,13 +3144,19 @@ def receive_phone_activity():
         WHERE id = 1
     """).fetchone()
 
-    event_type = "update"
+    event_type = (
+        "update"
+    )
 
     if old is None:
-        event_type = "initial"
+        event_type = (
+            "initial"
+        )
 
     elif (
-        old["screen"]
+        old[
+            "screen"
+        ]
         != screen
     ):
         if screen == "on":
@@ -3005,7 +3170,9 @@ def receive_phone_activity():
             )
 
     elif (
-        old["locked"]
+        old[
+            "locked"
+        ]
         != locked
     ):
         if locked == "false":
@@ -3019,7 +3186,9 @@ def receive_phone_activity():
             )
 
     elif (
-        old["app_package"]
+        old[
+            "app_package"
+        ]
         != app_package
     ):
         event_type = (
@@ -3027,7 +3196,9 @@ def receive_phone_activity():
         )
 
     elif (
-        old["last_interaction"]
+        old[
+            "last_interaction"
+        ]
         != last_interaction
     ):
         event_type = (
@@ -3120,9 +3291,11 @@ def receive_phone_activity():
 
     return jsonify({
         "status": "ok",
+
         "event_type": (
             event_type
         ),
+
         "received_at": (
             received_at
         )
@@ -3297,7 +3470,7 @@ def reality_summary():
 
 
 # =========================
-# Environment Reality
+# Environment
 # =========================
 
 @app.route(
@@ -3329,16 +3502,14 @@ def reality_environment():
 
     relevant_summary = {}
 
-    summary_keys = [
+    for key in [
         "thermal_feel",
         "precipitation",
         "ambient_light",
         "ambient_sound",
         "weather_description",
         "surroundings_description"
-    ]
-
-    for key in summary_keys:
+    ]:
         value = (
             summary.get(
                 key
@@ -3378,7 +3549,7 @@ def reality_environment():
 
 
 # =========================
-# Device Reality
+# Device
 # =========================
 
 @app.route(
@@ -3410,14 +3581,12 @@ def reality_device():
 
     relevant_summary = {}
 
-    summary_keys = [
+    for key in [
         "device_power",
         "connectivity",
         "device_description",
         "connectivity_description"
-    ]
-
-    for key in summary_keys:
+    ]:
         value = (
             summary.get(
                 key
@@ -3457,7 +3626,7 @@ def reality_device():
 
 
 # =========================
-# Location Reality
+# Location
 # =========================
 
 @app.route(
@@ -3529,7 +3698,7 @@ def reality_location():
 
 
 # =========================
-# Phone Reality
+# Phone
 # =========================
 
 @app.route(
@@ -3624,7 +3793,9 @@ def reality_phone_timeline():
             )
         ),
 
-        "timeline": timeline
+        "timeline": (
+            timeline
+        )
     })
 
 
@@ -3665,7 +3836,9 @@ def reality_spatial():
             utc_now_iso()
         ),
 
-        "spatial": spatial
+        "spatial": (
+            spatial
+        )
     })
 
 
@@ -4016,6 +4189,291 @@ def reality_spatial_places():
 
 
 # =========================
+# Personal Place from POI
+# =========================
+
+@app.route(
+    "/reality/spatial/places/from-poi",
+    methods=["POST"]
+)
+def reality_spatial_place_from_poi():
+    auth_error = check_token()
+
+    if auth_error:
+        return auth_error
+
+    data = request.get_json(
+        silent=True
+    )
+
+    if not isinstance(
+        data,
+        dict
+    ):
+        return jsonify({
+            "error": "invalid_json"
+        }), 400
+
+    poi = (
+        data.get(
+            "poi"
+        )
+    )
+
+    if isinstance(
+        poi,
+        dict
+    ):
+        poi_name = (
+            poi.get(
+                "name"
+            )
+        )
+
+        poi_location = (
+            poi.get(
+                "location"
+            )
+        )
+
+        poi_type = (
+            poi.get(
+                "type"
+            )
+        )
+
+        poi_address = (
+            poi.get(
+                "address"
+            )
+        )
+
+        poi_id = (
+            poi.get(
+                "id"
+            )
+        )
+
+    else:
+        poi_name = (
+            data.get(
+                "poi_name"
+            )
+        )
+
+        poi_location = (
+            data.get(
+                "poi_location"
+            )
+        )
+
+        poi_type = (
+            data.get(
+                "poi_type"
+            )
+        )
+
+        poi_address = (
+            data.get(
+                "poi_address"
+            )
+        )
+
+        poi_id = (
+            data.get(
+                "poi_id"
+            )
+        )
+
+    save_name = str(
+        data.get(
+            "name"
+        )
+        or poi_name
+        or ""
+    ).strip()
+
+    if not save_name:
+        return jsonify({
+            "error": (
+                "name_required"
+            )
+        }), 400
+
+    if not poi_location:
+        return jsonify({
+            "error": (
+                "poi_location_required"
+            )
+        }), 400
+
+    parsed = (
+        parse_amap_location(
+            poi_location
+        )
+    )
+
+    if not parsed.get(
+        "available"
+    ):
+        return jsonify({
+            "error": (
+                parsed.get(
+                    "reason",
+                    "invalid_poi_location"
+                )
+            )
+        }), 400
+
+    converted = (
+        gcj02_to_wgs84(
+            parsed[
+                "latitude"
+            ],
+            parsed[
+                "longitude"
+            ]
+        )
+    )
+
+    if not converted.get(
+        "available"
+    ):
+        return jsonify({
+            "error": (
+                converted.get(
+                    "reason",
+                    "coordinate_conversion_failed"
+                )
+            )
+        }), 400
+
+    kind = (
+        data.get(
+            "kind",
+            "custom"
+        )
+    )
+
+    radius_m = (
+        data.get(
+            "radius_m",
+            150
+        )
+    )
+
+    note = (
+        data.get(
+            "note"
+        )
+    )
+
+    if note is None:
+        note_parts = []
+
+        if poi_name:
+            note_parts.append(
+                f"高德POI：{poi_name}"
+            )
+
+        if poi_address:
+            note_parts.append(
+                f"地址：{poi_address}"
+            )
+
+        if poi_type:
+            note_parts.append(
+                f"类型：{poi_type}"
+            )
+
+        if poi_id:
+            note_parts.append(
+                f"POI ID：{poi_id}"
+            )
+
+        if note_parts:
+            note = "；".join(
+                note_parts
+            )
+
+    result = (
+        save_personal_place(
+            name=save_name,
+            kind=kind,
+
+            latitude=(
+                converted[
+                    "latitude"
+                ]
+            ),
+
+            longitude=(
+                converted[
+                    "longitude"
+                ]
+            ),
+
+            radius_m=radius_m,
+            note=note
+        )
+    )
+
+    if not result.get(
+        "ok"
+    ):
+        return jsonify({
+            "error": (
+                result.get(
+                    "error",
+                    "save_failed"
+                )
+            )
+        }), 400
+
+    place = (
+        result[
+            "place"
+        ]
+    )
+
+    place[
+        "source"
+    ] = "amap_poi"
+
+    return jsonify({
+        "status": "ok",
+
+        "place": (
+            place
+        ),
+
+        "source_poi": {
+            "id": poi_id,
+
+            "name": (
+                poi_name
+            ),
+
+            "type": (
+                poi_type
+            ),
+
+            "address": (
+                poi_address
+            ),
+
+            "location": (
+                poi_location
+            ),
+
+            "coordinate_system": (
+                "gcj02"
+            )
+        }
+    }), 200
+
+
+# =========================
 # 单个 Personal Place
 # =========================
 
@@ -4198,6 +4656,7 @@ def reality_spatial_nearby():
 
             "nearby": {
                 "available": False,
+
                 "reason": (
                     "no_fresh_location"
                 )
@@ -4220,6 +4679,7 @@ def reality_spatial_nearby():
     ):
         return jsonify({
             "status": "ok",
+
             "nearby": (
                 converted
             )
@@ -4256,6 +4716,7 @@ def reality_spatial_nearby():
             converted[
                 "longitude"
             ],
+
             keywords=keywords,
             types=types,
             radius_m=radius_m,
@@ -4278,6 +4739,16 @@ def reality_spatial_nearby():
 
 # =========================
 # Route
+#
+# 支持三种 destination：
+#
+# 1. ?place=家
+#
+# 2. ?latitude=...&longitude=...
+#    WGS84
+#
+# 3. ?poi_location=116.xxx,29.xxx
+#    Amap GCJ-02
 # =========================
 
 @app.route(
@@ -4312,6 +4783,7 @@ def reality_spatial_route():
 
             "route": {
                 "available": False,
+
                 "reason": (
                     "no_fresh_location"
                 )
@@ -4333,9 +4805,154 @@ def reality_spatial_route():
         )
     )
 
-    destination_latitude = None
-    destination_longitude = None
-    destination_name = None
+    poi_location = (
+        request.args.get(
+            "poi_location"
+        )
+    )
+
+    poi_name = (
+        request.args.get(
+            "poi_name"
+        )
+    )
+
+    # =========================
+    # 路线到高德 POI
+    # =========================
+
+    if poi_location:
+        parsed = (
+            parse_amap_location(
+                poi_location
+            )
+        )
+
+        if not parsed.get(
+            "available"
+        ):
+            return jsonify({
+                "error": (
+                    parsed.get(
+                        "reason",
+                        "invalid_poi_location"
+                    )
+                )
+            }), 400
+
+        origin_gcj = (
+            convert_gps_to_amap(
+                current[
+                    "latitude"
+                ],
+                current[
+                    "longitude"
+                ]
+            )
+        )
+
+        if not origin_gcj.get(
+            "available"
+        ):
+            return jsonify({
+                "status": "ok",
+
+                "route": (
+                    origin_gcj
+                )
+            })
+
+        route_result = (
+            route_amap_coordinates(
+                origin_gcj[
+                    "latitude"
+                ],
+                origin_gcj[
+                    "longitude"
+                ],
+
+                parsed[
+                    "latitude"
+                ],
+                parsed[
+                    "longitude"
+                ],
+
+                mode=mode
+            )
+        )
+
+        destination_wgs = (
+            gcj02_to_wgs84(
+                parsed[
+                    "latitude"
+                ],
+                parsed[
+                    "longitude"
+                ]
+            )
+        )
+
+        straight_distance = None
+
+        if destination_wgs.get(
+            "available"
+        ):
+            straight_distance = (
+                haversine_m(
+                    current[
+                        "latitude"
+                    ],
+                    current[
+                        "longitude"
+                    ],
+
+                    destination_wgs[
+                        "latitude"
+                    ],
+                    destination_wgs[
+                        "longitude"
+                    ]
+                )
+            )
+
+        route_result[
+            "destination_type"
+        ] = "amap_poi"
+
+        route_result[
+            "destination_name"
+        ] = (
+            poi_name
+        )
+
+        route_result[
+            "straight_line_distance_m"
+        ] = (
+            round(
+                straight_distance,
+                1
+            )
+            if straight_distance
+            is not None
+            else None
+        )
+
+        return jsonify({
+            "status": "ok",
+
+            "generated_at": (
+                utc_now_iso()
+            ),
+
+            "route": (
+                route_result
+            )
+        })
+
+    # =========================
+    # 路线到 Personal Place
+    # =========================
 
     if place_name:
         place = (
@@ -4367,44 +4984,127 @@ def reality_spatial_route():
             ]
         )
 
-        destination_name = (
+        route_result = (
+            amap_route(
+                current[
+                    "latitude"
+                ],
+                current[
+                    "longitude"
+                ],
+
+                destination_latitude,
+                destination_longitude,
+
+                mode=mode
+            )
+        )
+
+        straight_distance = (
+            haversine_m(
+                current[
+                    "latitude"
+                ],
+                current[
+                    "longitude"
+                ],
+
+                destination_latitude,
+                destination_longitude
+            )
+        )
+
+        route_result[
+            "destination_type"
+        ] = (
+            "personal_place"
+        )
+
+        route_result[
+            "destination_name"
+        ] = (
             place[
                 "name"
             ]
         )
 
-    else:
-        try:
-            destination_latitude = float(
-                request.args.get(
-                    "latitude"
-                )
+        route_result[
+            "destination_kind"
+        ] = (
+            place.get(
+                "kind"
             )
+        )
 
-            destination_longitude = float(
-                request.args.get(
-                    "longitude"
-                )
+        route_result[
+            "straight_line_distance_m"
+        ] = (
+            round(
+                straight_distance,
+                1
             )
+            if straight_distance
+            is not None
+            else None
+        )
 
-        except Exception:
-            return jsonify({
-                "error": (
-                    "destination_required"
-                ),
+        return jsonify({
+            "status": "ok",
 
-                "message": (
-                    "Use ?place=NAME or provide "
-                    "latitude and longitude."
-                )
-            }), 400
+            "generated_at": (
+                utc_now_iso()
+            ),
+
+            "route": (
+                route_result
+            )
+        })
+
+    # =========================
+    # 路线到手动 WGS84 坐标
+    # =========================
+
+    try:
+        destination_latitude = float(
+            request.args.get(
+                "latitude"
+            )
+        )
+
+        destination_longitude = float(
+            request.args.get(
+                "longitude"
+            )
+        )
+
+    except Exception:
+        return jsonify({
+            "error": (
+                "destination_required"
+            ),
+
+            "message": (
+                "Use ?place=NAME, "
+                "?poi_location=LON,LAT, "
+                "or provide latitude and longitude."
+            )
+        }), 400
+
+    if not (
+        -90 <= destination_latitude <= 90
+        and -180 <= destination_longitude <= 180
+    ):
+        return jsonify({
+            "error": (
+                "coordinates_out_of_range"
+            )
+        }), 400
 
     route_result = (
         amap_route(
             current[
                 "latitude"
             ],
-
             current[
                 "longitude"
             ],
@@ -4416,17 +5116,11 @@ def reality_spatial_route():
         )
     )
 
-    if destination_name:
-        route_result[
-            "destination_name"
-        ] = destination_name
-
     straight_distance = (
         haversine_m(
             current[
                 "latitude"
             ],
-
             current[
                 "longitude"
             ],
@@ -4434,6 +5128,12 @@ def reality_spatial_route():
             destination_latitude,
             destination_longitude
         )
+    )
+
+    route_result[
+        "destination_type"
+    ] = (
+        "coordinates"
     )
 
     route_result[
@@ -4514,9 +5214,17 @@ def reality_status():
         sensor_status[
             sensor_name
         ] = {
-            "freshness": freshness,
-            "age_seconds": age_seconds,
-            "updated_at": updated_at
+            "freshness": (
+                freshness
+            ),
+
+            "age_seconds": (
+                age_seconds
+            ),
+
+            "updated_at": (
+                updated_at
+            )
         }
 
         if freshness == "fresh":
@@ -4611,8 +5319,10 @@ def reality_status():
         "spatial_provider": {
             "name": "amap",
 
-            "configured": bool(
-                AMAP_KEY
+            "configured": (
+                bool(
+                    AMAP_KEY
+                )
             )
         },
 
@@ -4625,8 +5335,10 @@ def reality_status():
         },
 
         "phone_activity_status": {
-            "available": bool(
-                phone_activity
+            "available": (
+                bool(
+                    phone_activity
+                )
             ),
 
             "freshness": (
@@ -4672,10 +5384,8 @@ def context_check():
         return """
         <!doctype html>
         <html>
-
         <head>
             <meta charset="utf-8">
-
             <title>
                 Xiaxia Sense Context Check
             </title>
@@ -4814,10 +5524,8 @@ def phone_timeline_check():
         return """
         <!doctype html>
         <html>
-
         <head>
             <meta charset="utf-8">
-
             <title>
                 Xiaxia Phone Timeline Check
             </title>
