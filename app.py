@@ -423,8 +423,7 @@ def run_housekeeping(
             timezone.utc
         )
         - timedelta(
-            seconds=
-            MESSAGE_RETENTION_SECONDS
+            seconds=MESSAGE_RETENTION_SECONDS
         )
     ).isoformat()
 
@@ -831,12 +830,8 @@ def build_recent_apps(
         )
 
         recent_apps.append({
-            "app_name": (
-                app_name
-            ),
-            "package_name": (
-                package_name
-            ),
+            "app_name": app_name,
+            "package_name": package_name,
             "last_seen_at": (
                 event.get(
                     "event_at"
@@ -1246,14 +1241,17 @@ def latest_location_from_semantic(
         "latitude": float(
             latitude
         ),
+
         "longitude": float(
             longitude
         ),
+
         "accuracy_m": (
             location.get(
                 "accuracy_m"
             )
         ),
+
         "speed_m_s": (
             location.get(
                 "speed_m_s"
@@ -1458,6 +1456,62 @@ def load_spatial_history(
     return history
 
 
+# =========================
+# Personal Places
+# =========================
+
+def normalize_place_kind(
+    kind
+):
+    if kind is None:
+        return "custom"
+
+    value = str(
+        kind
+    ).strip().lower()
+
+    aliases = {
+        "home": "home",
+        "家": "home",
+        "家里": "home",
+
+        "work": "work",
+        "office": "work",
+        "company": "work",
+        "公司": "work",
+        "单位": "work",
+
+        "park": "park",
+        "公园": "park",
+
+        "mall": "mall",
+        "shopping": "mall",
+        "商场": "mall",
+
+        "restaurant": "restaurant",
+        "餐厅": "restaurant",
+        "饭店": "restaurant",
+
+        "school": "school",
+        "学校": "school",
+
+        "station": "station",
+        "车站": "station",
+
+        "hotel": "hotel",
+        "酒店": "hotel",
+
+        "custom": "custom",
+        "other": "custom",
+        "其他": "custom"
+    }
+
+    return aliases.get(
+        value,
+        value or "custom"
+    )
+
+
 def load_personal_places():
     conn = get_db()
 
@@ -1474,7 +1528,13 @@ def load_personal_places():
 
         FROM personal_places
 
-        ORDER BY name
+        ORDER BY
+            CASE kind
+                WHEN 'home' THEN 1
+                WHEN 'work' THEN 2
+                ELSE 3
+            END,
+            name
     """).fetchall()
 
     conn.close()
@@ -1488,6 +1548,17 @@ def load_personal_places():
 def find_personal_place(
     name
 ):
+    if not isinstance(
+        name,
+        str
+    ):
+        return None
+
+    name = name.strip()
+
+    if not name:
+        return None
+
     conn = get_db()
 
     row = conn.execute("""
@@ -1517,6 +1588,41 @@ def find_personal_place(
         return None
 
     return dict(row)
+
+
+def place_distance_status(
+    distance_m,
+    radius_m
+):
+    if not isinstance(
+        distance_m,
+        (int, float)
+    ):
+        return "unknown"
+
+    if not isinstance(
+        radius_m,
+        (int, float)
+    ):
+        radius_m = 150
+
+    if distance_m <= radius_m:
+        return "inside"
+
+    nearby_threshold = max(
+        radius_m * 3,
+        500
+    )
+
+    nearby_threshold = min(
+        nearby_threshold,
+        1500
+    )
+
+    if distance_m <= nearby_threshold:
+        return "nearby"
+
+    return "away"
 
 
 def build_place_relations(
@@ -1561,6 +1667,13 @@ def build_place_relations(
         ):
             radius_m = 150
 
+        status = (
+            place_distance_status(
+                distance,
+                radius_m
+            )
+        )
+
         relations.append({
             "name": (
                 place.get(
@@ -1582,12 +1695,18 @@ def build_place_relations(
             ),
 
             "radius_m": (
-                radius_m
+                round(
+                    radius_m,
+                    1
+                )
             ),
 
             "inside": (
-                distance
-                <= radius_m
+                status == "inside"
+            ),
+
+            "status": (
+                status
             )
         })
 
@@ -1618,71 +1737,181 @@ def build_place_trends(
     ):
         return []
 
-    start = history[0]
-    end = history[-1]
-
     trends = []
 
+    start_point = history[0]
+    end_point = history[-1]
+
     for place in places:
-        start_distance = (
-            haversine_m(
-                start.get(
-                    "latitude"
-                ),
-                start.get(
-                    "longitude"
-                ),
-                place.get(
-                    "latitude"
-                ),
-                place.get(
-                    "longitude"
-                )
-            )
-        )
-
-        end_distance = (
-            haversine_m(
-                end.get(
-                    "latitude"
-                ),
-                end.get(
-                    "longitude"
-                ),
-                place.get(
-                    "latitude"
-                ),
-                place.get(
-                    "longitude"
-                )
-            )
-        )
-
-        if (
-            start_distance is None
-            or end_distance is None
+        if not isinstance(
+            place,
+            dict
         ):
             continue
 
-        delta = (
+        place_latitude = (
+            place.get(
+                "latitude"
+            )
+        )
+
+        place_longitude = (
+            place.get(
+                "longitude"
+            )
+        )
+
+        radius_m = (
+            place.get(
+                "radius_m"
+            )
+        )
+
+        if not isinstance(
+            radius_m,
+            (int, float)
+        ):
+            radius_m = 150
+
+        distances = []
+
+        for point in history:
+            distance = (
+                haversine_m(
+                    point.get(
+                        "latitude"
+                    ),
+                    point.get(
+                        "longitude"
+                    ),
+                    place_latitude,
+                    place_longitude
+                )
+            )
+
+            if distance is None:
+                continue
+
+            distances.append({
+                "distance_m": distance,
+                "recorded_at": (
+                    point.get(
+                        "recorded_at"
+                    )
+                )
+            })
+
+        if len(
+            distances
+        ) < 2:
+            continue
+
+        start_distance = (
+            distances[0][
+                "distance_m"
+            ]
+        )
+
+        end_distance = (
+            distances[-1][
+                "distance_m"
+            ]
+        )
+
+        start_inside = (
+            start_distance
+            <= radius_m
+        )
+
+        current_inside = (
+            end_distance
+            <= radius_m
+        )
+
+        entered = False
+        left = False
+        first_entered_at = None
+        first_left_at = None
+
+        previous_inside = (
+            distances[0][
+                "distance_m"
+            ]
+            <= radius_m
+        )
+
+        for sample in distances[1:]:
+            current_sample_inside = (
+                sample[
+                    "distance_m"
+                ]
+                <= radius_m
+            )
+
+            if (
+                not previous_inside
+                and current_sample_inside
+            ):
+                entered = True
+
+                if (
+                    first_entered_at
+                    is None
+                ):
+                    first_entered_at = (
+                        sample.get(
+                            "recorded_at"
+                        )
+                    )
+
+            elif (
+                previous_inside
+                and not current_sample_inside
+            ):
+                left = True
+
+                if (
+                    first_left_at
+                    is None
+                ):
+                    first_left_at = (
+                        sample.get(
+                            "recorded_at"
+                        )
+                    )
+
+            previous_inside = (
+                current_sample_inside
+            )
+
+        distance_change = (
             end_distance
             - start_distance
         )
 
-        if delta <= -100:
-            trend = (
-                "approaching"
-            )
+        if entered and current_inside:
+            trend = "entered"
 
-        elif delta >= 100:
-            trend = (
-                "moving_away"
-            )
+        elif left and not current_inside:
+            trend = "left"
+
+        elif (
+            not current_inside
+            and distance_change <= -100
+        ):
+            trend = "approaching"
+
+        elif (
+            not current_inside
+            and distance_change >= 100
+        ):
+            trend = "moving_away"
+
+        elif current_inside:
+            trend = "inside"
 
         else:
-            trend = (
-                "roughly_stable"
-            )
+            trend = "roughly_stable"
 
         trends.append({
             "name": (
@@ -1697,7 +1926,43 @@ def build_place_trends(
                 )
             ),
 
-            "trend": trend,
+            "trend": (
+                trend
+            ),
+
+            "start_inside": (
+                start_inside
+            ),
+
+            "current_inside": (
+                current_inside
+            ),
+
+            "entered_during_window": (
+                entered
+            ),
+
+            "left_during_window": (
+                left
+            ),
+
+            "entered_at": (
+                epoch_to_iso(
+                    first_entered_at
+                )
+                if first_entered_at
+                is not None
+                else None
+            ),
+
+            "left_at": (
+                epoch_to_iso(
+                    first_left_at
+                )
+                if first_left_at
+                is not None
+                else None
+            ),
 
             "start_distance_m": (
                 round(
@@ -1715,24 +1980,196 @@ def build_place_trends(
 
             "distance_change_m": (
                 round(
-                    delta,
+                    distance_change,
                     1
                 )
             )
         })
 
+    priority = {
+        "entered": 0,
+        "left": 1,
+        "approaching": 2,
+        "moving_away": 3,
+        "inside": 4,
+        "roughly_stable": 5
+    }
+
     trends.sort(
-        key=lambda item: abs(
+        key=lambda item: (
+            priority.get(
+                item.get(
+                    "trend"
+                ),
+                99
+            ),
             item.get(
-                "distance_change_m",
-                0
+                "current_distance_m",
+                float("inf")
             )
-        ),
-        reverse=True
+        )
     )
 
     return trends
 
+
+def save_personal_place(
+    name,
+    kind,
+    latitude,
+    longitude,
+    radius_m=150,
+    note=None
+):
+    name = str(
+        name or ""
+    ).strip()
+
+    if not name:
+        return {
+            "ok": False,
+            "error": (
+                "name_required"
+            )
+        }
+
+    try:
+        latitude = float(
+            latitude
+        )
+
+        longitude = float(
+            longitude
+        )
+
+        radius_m = float(
+            radius_m
+        )
+
+    except Exception:
+        return {
+            "ok": False,
+            "error": (
+                "invalid_place_coordinates"
+            )
+        }
+
+    if not (
+        -90 <= latitude <= 90
+        and -180 <= longitude <= 180
+    ):
+        return {
+            "ok": False,
+            "error": (
+                "coordinates_out_of_range"
+            )
+        }
+
+    radius_m = max(
+        20,
+        min(
+            radius_m,
+            5000
+        )
+    )
+
+    kind = normalize_place_kind(
+        kind
+    )
+
+    if note is not None:
+        note = str(
+            note
+        ).strip()
+
+        if not note:
+            note = None
+
+    now = utc_now_iso()
+
+    conn = get_db()
+
+    existing = conn.execute("""
+        SELECT created_at
+
+        FROM personal_places
+
+        WHERE lower(name)
+            = lower(?)
+
+        LIMIT 1
+    """, (
+        name,
+    )).fetchone()
+
+    if existing is None:
+        created_at = now
+
+    else:
+        created_at = (
+            existing[
+                "created_at"
+            ]
+        )
+
+        conn.execute("""
+            DELETE FROM personal_places
+
+            WHERE lower(name)
+                = lower(?)
+        """, (
+            name,
+        ))
+
+    conn.execute("""
+        INSERT INTO personal_places (
+            name,
+            kind,
+            latitude,
+            longitude,
+            radius_m,
+            note,
+            created_at,
+            updated_at
+        )
+
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        name,
+        kind,
+        latitude,
+        longitude,
+        radius_m,
+        note,
+        created_at,
+        now
+    ))
+
+    conn.commit()
+    conn.close()
+
+    return {
+        "ok": True,
+
+        "place": {
+            "name": name,
+            "kind": kind,
+            "latitude": latitude,
+            "longitude": longitude,
+            "coordinate_system": (
+                "wgs84"
+            ),
+            "radius_m": radius_m,
+            "note": note,
+            "created_at": created_at,
+            "updated_at": now
+        }
+    }
+
+
+# =========================
+# Spatial Context
+# =========================
 
 def build_spatial_context(
     semantic,
@@ -1851,12 +2288,28 @@ def build_spatial_context(
             movement
         ),
 
+        "personal_places": {
+            "count": (
+                len(
+                    places
+                )
+            ),
+
+            "relations": (
+                relations[:20]
+            ),
+
+            "trends": (
+                place_trends[:20]
+            )
+        },
+
         "personal_place_relations": (
-            relations[:10]
+            relations[:20]
         ),
 
         "personal_place_trends": (
-            place_trends[:10]
+            place_trends[:20]
         )
     }
 
@@ -1864,6 +2317,19 @@ def build_spatial_context(
         spatial[
             "nearest_personal_place"
         ] = relations[0]
+
+        inside_places = [
+            item
+            for item in relations
+            if item.get(
+                "inside"
+            ) is True
+        ]
+
+        if inside_places:
+            spatial[
+                "current_personal_places"
+            ] = inside_places
 
     converted = (
         convert_gps_to_amap(
@@ -2036,19 +2502,13 @@ def build_current_context():
 
     return {
         "sensors": sensors,
-
         "semantic": semantic,
-
         "weather": weather,
-
         "spatial": spatial,
-
         "reality": reality,
-
         "phone_activity": (
             phone_activity
         ),
-
         "phone_activity_summary": (
             phone_activity_summary
         )
@@ -3272,6 +3732,17 @@ def reality_spatial_history():
         )
     )
 
+    places = (
+        load_personal_places()
+    )
+
+    place_trends = (
+        build_place_trends(
+            history,
+            places
+        )
+    )
+
     return jsonify({
         "status": "ok",
 
@@ -3289,9 +3760,17 @@ def reality_spatial_history():
             )
         ),
 
-        "movement": movement,
+        "movement": (
+            movement
+        ),
 
-        "history": history
+        "personal_place_trends": (
+            place_trends
+        ),
+
+        "history": (
+            history
+        )
     })
 
 
@@ -3317,6 +3796,37 @@ def reality_spatial_places():
             load_personal_places()
         )
 
+        sensors = (
+            load_latest_sensors()
+        )
+
+        semantic = (
+            build_semantic_context(
+                sensors
+            )
+        )
+
+        current = (
+            latest_location_from_semantic(
+                semantic
+            )
+        )
+
+        relations = []
+
+        if current:
+            relations = (
+                build_place_relations(
+                    current[
+                        "latitude"
+                    ],
+                    current[
+                        "longitude"
+                    ],
+                    places
+                )
+            )
+
         return jsonify({
             "status": "ok",
 
@@ -3324,7 +3834,19 @@ def reality_spatial_places():
                 utc_now_iso()
             ),
 
-            "places": places
+            "count": (
+                len(
+                    places
+                )
+            ),
+
+            "places": (
+                places
+            ),
+
+            "relations": (
+                relations
+            )
         })
 
     data = request.get_json(
@@ -3346,21 +3868,17 @@ def reality_spatial_places():
         )
     ).strip()
 
+    if not name:
+        return jsonify({
+            "error": (
+                "name_required"
+            )
+        }), 400
+
     kind = (
         data.get(
-            "kind"
-        )
-    )
-
-    latitude = (
-        data.get(
-            "latitude"
-        )
-    )
-
-    longitude = (
-        data.get(
-            "longitude"
+            "kind",
+            "custom"
         )
     )
 
@@ -3377,134 +3895,238 @@ def reality_spatial_places():
         )
     )
 
-    if not name:
-        return jsonify({
-            "error": (
-                "name_required"
+    latitude = (
+        data.get(
+            "latitude"
+        )
+    )
+
+    longitude = (
+        data.get(
+            "longitude"
+        )
+    )
+
+    use_current_location = (
+        data.get(
+            "use_current_location"
+        )
+    )
+
+    if (
+        latitude is None
+        or longitude is None
+    ):
+        if (
+            use_current_location
+            is False
+        ):
+            return jsonify({
+                "error": (
+                    "coordinates_required"
+                )
+            }), 400
+
+        sensors = (
+            load_latest_sensors()
+        )
+
+        semantic = (
+            build_semantic_context(
+                sensors
             )
-        }), 400
-
-    try:
-        latitude = float(
-            latitude
         )
 
-        longitude = float(
-            longitude
-        )
-
-        radius_m = float(
-            radius_m
-        )
-
-    except Exception:
-        return jsonify({
-            "error": (
-                "invalid_place_coordinates"
+        current = (
+            latest_location_from_semantic(
+                semantic
             )
-        }), 400
+        )
 
-    if not (
-        -90 <= latitude <= 90
-        and -180 <= longitude <= 180
+        if current is None:
+            return jsonify({
+                "error": (
+                    "no_fresh_location"
+                ),
+
+                "message": (
+                    "No fresh location is available "
+                    "to save this personal place."
+                )
+            }), 409
+
+        latitude = (
+            current[
+                "latitude"
+            ]
+        )
+
+        longitude = (
+            current[
+                "longitude"
+            ]
+        )
+
+        source = (
+            "current_location"
+        )
+
+    else:
+        source = (
+            "provided_coordinates"
+        )
+
+    result = (
+        save_personal_place(
+            name=name,
+            kind=kind,
+            latitude=latitude,
+            longitude=longitude,
+            radius_m=radius_m,
+            note=note
+        )
+    )
+
+    if not result.get(
+        "ok"
     ):
         return jsonify({
             "error": (
-                "coordinates_out_of_range"
+                result.get(
+                    "error",
+                    "save_failed"
+                )
             )
         }), 400
 
-    radius_m = max(
-        20,
-        min(
-            radius_m,
-            5000
-        )
+    place = (
+        result[
+            "place"
+        ]
     )
 
-    now = (
-        utc_now_iso()
-    )
-
-    conn = get_db()
-
-    conn.execute("""
-        INSERT INTO personal_places (
-            name,
-            kind,
-            latitude,
-            longitude,
-            radius_m,
-            note,
-            created_at,
-            updated_at
-        )
-
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-
-        ON CONFLICT(name)
-
-        DO UPDATE SET
-            kind =
-                excluded.kind,
-
-            latitude =
-                excluded.latitude,
-
-            longitude =
-                excluded.longitude,
-
-            radius_m =
-                excluded.radius_m,
-
-            note =
-                excluded.note,
-
-            updated_at =
-                excluded.updated_at
-    """, (
-        name,
-        kind,
-        latitude,
-        longitude,
-        radius_m,
-        note,
-        now,
-        now
-    ))
-
-    conn.commit()
-    conn.close()
+    place[
+        "source"
+    ] = source
 
     return jsonify({
         "status": "ok",
-
-        "place": {
-            "name": name,
-            "kind": kind,
-            "latitude": latitude,
-            "longitude": longitude,
-            "radius_m": radius_m,
-            "note": note
-        }
+        "place": place
     }), 200
 
 
 # =========================
-# 删除 Personal Place
+# 单个 Personal Place
 # =========================
 
 @app.route(
     "/reality/spatial/places/<name>",
-    methods=["DELETE"]
+    methods=[
+        "GET",
+        "DELETE"
+    ]
 )
-def reality_spatial_delete_place(
+def reality_spatial_place(
     name
 ):
     auth_error = check_token()
 
     if auth_error:
         return auth_error
+
+    if request.method == "GET":
+        place = (
+            find_personal_place(
+                name
+            )
+        )
+
+        if place is None:
+            return jsonify({
+                "error": (
+                    "personal_place_not_found"
+                ),
+
+                "name": (
+                    name
+                )
+            }), 404
+
+        sensors = (
+            load_latest_sensors()
+        )
+
+        semantic = (
+            build_semantic_context(
+                sensors
+            )
+        )
+
+        current = (
+            latest_location_from_semantic(
+                semantic
+            )
+        )
+
+        relation = None
+
+        if current:
+            relations = (
+                build_place_relations(
+                    current[
+                        "latitude"
+                    ],
+                    current[
+                        "longitude"
+                    ],
+                    [place]
+                )
+            )
+
+            if relations:
+                relation = (
+                    relations[0]
+                )
+
+        history = (
+            load_spatial_history(
+                minutes=30,
+                limit=200
+            )
+        )
+
+        trends = (
+            build_place_trends(
+                history,
+                [place]
+            )
+        )
+
+        trend = (
+            trends[0]
+            if trends
+            else None
+        )
+
+        return jsonify({
+            "status": "ok",
+
+            "generated_at": (
+                utc_now_iso()
+            ),
+
+            "place": (
+                place
+            ),
+
+            "relation": (
+                relation
+            ),
+
+            "trend": (
+                trend
+            )
+        })
 
     conn = get_db()
 
@@ -3534,7 +4156,9 @@ def reality_spatial_delete_place(
             deleted > 0
         ),
 
-        "name": name
+        "name": (
+            name
+        )
     })
 
 
@@ -3596,7 +4220,9 @@ def reality_spatial_nearby():
     ):
         return jsonify({
             "status": "ok",
-            "nearby": converted
+            "nearby": (
+                converted
+            )
         })
 
     keywords = (
@@ -3644,7 +4270,9 @@ def reality_spatial_nearby():
             utc_now_iso()
         ),
 
-        "nearby": nearby
+        "nearby": (
+            nearby
+        )
     })
 
 
@@ -3722,7 +4350,9 @@ def reality_spatial_route():
                     "personal_place_not_found"
                 ),
 
-                "place": place_name
+                "place": (
+                    place_name
+                )
             }), 404
 
         destination_latitude = (
@@ -3825,7 +4455,9 @@ def reality_spatial_route():
             utc_now_iso()
         ),
 
-        "route": route_result
+        "route": (
+            route_result
+        )
     })
 
 
@@ -3981,6 +4613,14 @@ def reality_status():
 
             "configured": bool(
                 AMAP_KEY
+            )
+        },
+
+        "personal_places": {
+            "count": (
+                len(
+                    load_personal_places()
+                )
             )
         },
 
@@ -4306,7 +4946,9 @@ def phone_timeline_check():
             )
         ),
 
-        "timeline": timeline
+        "timeline": (
+            timeline
+        )
     })
 
 
