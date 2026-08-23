@@ -11,6 +11,11 @@ from semantic import build_semantic_context
 from weather import build_weather_context
 from reality import build_reality_context
 
+from history import (
+    build_phone_history_summary,
+    iso_to_epoch
+)
+
 from spatial import (
     haversine_m,
     convert_gps_to_amap,
@@ -65,6 +70,26 @@ DEFAULT_FRESHNESS_SECONDS = 300
 PHONE_ACTIVITY_FRESH_SECONDS = (
     12 * 60 * 60
 )
+
+
+# =========================
+# Phone Timeline / History
+# =========================
+
+PHONE_TIMELINE_DEFAULT_LIMIT = 200
+PHONE_TIMELINE_MAX_LIMIT = 1000
+PHONE_TIMELINE_MAX_MINUTES = 2880
+
+PHONE_HISTORY_DEFAULT_MINUTES = 60
+PHONE_HISTORY_MAX_MINUTES = 2880
+
+# History 默认不把原始事件吐给 GPT，
+# 因此内部可以读取更多事件来生成摘要。
+PHONE_HISTORY_MAX_QUERY_EVENTS = 5000
+
+# 为了恢复时间段开始时的 App / screen / lock 状态，
+# 会额外读取窗口开始之前的一小段事件。
+PHONE_HISTORY_STATE_LOOKBACK_EVENTS = 100
 
 
 # =========================
@@ -128,6 +153,42 @@ def epoch_to_iso(
 
     except Exception:
         return None
+
+
+def parse_bool_query(
+    value,
+    default=False
+):
+    if value is None:
+        return default
+
+    if isinstance(
+        value,
+        bool
+    ):
+        return value
+
+    value = str(
+        value
+    ).strip().lower()
+
+    if value in (
+        "1",
+        "true",
+        "yes",
+        "on"
+    ):
+        return True
+
+    if value in (
+        "0",
+        "false",
+        "no",
+        "off"
+    ):
+        return False
+
+    return default
 
 
 # =========================
@@ -597,10 +658,111 @@ def load_latest_sensors():
 # Phone Activity
 # =========================
 
+def normalize_phone_event_row(
+    row
+):
+    locked_value = (
+        row[
+            "locked"
+        ]
+    )
+
+    if locked_value == "true":
+        locked = True
+
+    elif locked_value == "false":
+        locked = False
+
+    else:
+        locked = None
+
+    return {
+        "event_type": (
+            row[
+                "event_type"
+            ]
+        ),
+
+        "screen": (
+            row[
+                "screen"
+            ]
+        ),
+
+        "locked": locked,
+
+        "app_name": (
+            row[
+                "app_name"
+            ]
+        ),
+
+        "app_package": (
+            row[
+                "app_package"
+            ]
+        ),
+
+        "event_time": (
+            row[
+                "event_time"
+            ]
+        ),
+
+        "event_at": (
+            epoch_to_iso(
+                row[
+                    "event_time"
+                ]
+            )
+        ),
+
+        "received_at": (
+            row[
+                "received_at"
+            ]
+        )
+    }
+
+
 def load_recent_phone_events(
     minutes=60,
-    limit=100
+    limit=PHONE_TIMELINE_DEFAULT_LIMIT
 ):
+    try:
+        minutes = int(
+            minutes
+        )
+
+    except Exception:
+        minutes = 60
+
+    try:
+        limit = int(
+            limit
+        )
+
+    except Exception:
+        limit = (
+            PHONE_TIMELINE_DEFAULT_LIMIT
+        )
+
+    minutes = max(
+        1,
+        min(
+            minutes,
+            PHONE_TIMELINE_MAX_MINUTES
+        )
+    )
+
+    limit = max(
+        1,
+        min(
+            limit,
+            PHONE_TIMELINE_MAX_LIMIT
+        )
+    )
+
     now_epoch = utc_now_epoch()
 
     cutoff = (
@@ -634,73 +796,340 @@ def load_recent_phone_events(
 
     conn.close()
 
-    events = []
+    return [
+        normalize_phone_event_row(
+            row
+        )
+        for row in rows
+    ]
 
-    for row in rows:
-        locked_value = (
-            row[
-                "locked"
-            ]
+
+# =========================
+# Phone History 数据读取
+# =========================
+
+def load_phone_history_events(
+    start_epoch,
+    end_epoch,
+    limit=PHONE_HISTORY_MAX_QUERY_EVENTS
+):
+    """
+    读取指定时间段 Phone Activity。
+
+    除窗口内事件外，
+    额外读取 start 之前最近的一批事件，
+    用于恢复窗口开始时的 foreground app、
+    screen 和 locked 状态。
+    """
+
+    try:
+        start_epoch = int(
+            start_epoch
         )
 
-        if locked_value == "true":
-            locked = True
+        end_epoch = int(
+            end_epoch
+        )
 
-        elif locked_value == "false":
-            locked = False
+    except Exception:
+        return []
 
-        else:
-            locked = None
+    try:
+        limit = int(
+            limit
+        )
 
-        events.append({
-            "event_type": (
-                row[
-                    "event_type"
-                ]
-            ),
+    except Exception:
+        limit = (
+            PHONE_HISTORY_MAX_QUERY_EVENTS
+        )
 
-            "screen": (
-                row[
-                    "screen"
-                ]
-            ),
+    limit = max(
+        1,
+        min(
+            limit,
+            PHONE_HISTORY_MAX_QUERY_EVENTS
+        )
+    )
 
-            "locked": locked,
+    conn = get_db()
 
-            "app_name": (
-                row[
-                    "app_name"
-                ]
-            ),
+    previous_rows = conn.execute("""
+        SELECT
+            event_type,
+            screen,
+            locked,
+            app_name,
+            app_package,
+            event_time,
+            received_at
 
-            "app_package": (
-                row[
-                    "app_package"
-                ]
-            ),
+        FROM phone_activity_events
 
-            "event_time": (
-                row[
-                    "event_time"
-                ]
-            ),
+        WHERE event_time < ?
 
-            "event_at": (
-                epoch_to_iso(
-                    row[
-                        "event_time"
-                    ]
-                )
-            ),
+        ORDER BY event_time DESC
 
-            "received_at": (
-                row[
-                    "received_at"
-                ]
+        LIMIT ?
+    """, (
+        start_epoch,
+        PHONE_HISTORY_STATE_LOOKBACK_EVENTS
+    )).fetchall()
+
+    window_rows = conn.execute("""
+        SELECT
+            event_type,
+            screen,
+            locked,
+            app_name,
+            app_package,
+            event_time,
+            received_at
+
+        FROM phone_activity_events
+
+        WHERE event_time >= ?
+          AND event_time <= ?
+
+        ORDER BY event_time ASC
+
+        LIMIT ?
+    """, (
+        start_epoch,
+        end_epoch,
+        limit
+    )).fetchall()
+
+    conn.close()
+
+    previous_events = [
+        normalize_phone_event_row(
+            row
+        )
+        for row in reversed(
+            previous_rows
+        )
+    ]
+
+    window_events = [
+        normalize_phone_event_row(
+            row
+        )
+        for row in window_rows
+    ]
+
+    return (
+        previous_events
+        + window_events
+    )
+
+
+def get_phone_history_time_range():
+    """
+    支持三种模式：
+
+    1. minutes
+       ?minutes=60
+
+    2. start + end
+       ?start=...&end=...
+
+    3. start
+       start 到现在
+
+    如果只提供 end：
+       用 minutes 向前回溯。
+    """
+
+    now_epoch = (
+        utc_now_epoch()
+    )
+
+    start_text = (
+        request.args.get(
+            "start"
+        )
+    )
+
+    end_text = (
+        request.args.get(
+            "end"
+        )
+    )
+
+    try:
+        minutes = int(
+            request.args.get(
+                "minutes",
+                PHONE_HISTORY_DEFAULT_MINUTES
             )
-        })
+        )
 
-    return events
+    except Exception:
+        minutes = (
+            PHONE_HISTORY_DEFAULT_MINUTES
+        )
+
+    minutes = max(
+        1,
+        min(
+            minutes,
+            PHONE_HISTORY_MAX_MINUTES
+        )
+    )
+
+    start_epoch = (
+        iso_to_epoch(
+            start_text
+        )
+        if start_text
+        else None
+    )
+
+    end_epoch = (
+        iso_to_epoch(
+            end_text
+        )
+        if end_text
+        else None
+    )
+
+    if (
+        start_text
+        and start_epoch is None
+    ):
+        return None, {
+            "error": (
+                "invalid_start_time"
+            ),
+
+            "message": (
+                "start must be a valid ISO 8601 datetime."
+            )
+        }
+
+    if (
+        end_text
+        and end_epoch is None
+    ):
+        return None, {
+            "error": (
+                "invalid_end_time"
+            ),
+
+            "message": (
+                "end must be a valid ISO 8601 datetime."
+            )
+        }
+
+    # start + end
+    if (
+        start_epoch is not None
+        and end_epoch is not None
+    ):
+        query_mode = (
+            "absolute_range"
+        )
+
+    # start → now
+    elif start_epoch is not None:
+        end_epoch = (
+            now_epoch
+        )
+
+        query_mode = (
+            "start_to_now"
+        )
+
+    # end - minutes → end
+    elif end_epoch is not None:
+        start_epoch = (
+            end_epoch
+            - minutes * 60
+        )
+
+        query_mode = (
+            "minutes_before_end"
+        )
+
+    # now - minutes → now
+    else:
+        end_epoch = (
+            now_epoch
+        )
+
+        start_epoch = (
+            end_epoch
+            - minutes * 60
+        )
+
+        query_mode = (
+            "relative_minutes"
+        )
+
+    if end_epoch <= start_epoch:
+        return None, {
+            "error": (
+                "invalid_time_range"
+            ),
+
+            "message": (
+                "end must be later than start."
+            )
+        }
+
+    max_window_seconds = (
+        PHONE_HISTORY_MAX_MINUTES
+        * 60
+    )
+
+    was_clamped = False
+
+    if (
+        end_epoch
+        - start_epoch
+    ) > max_window_seconds:
+
+        start_epoch = (
+            end_epoch
+            - max_window_seconds
+        )
+
+        was_clamped = True
+
+    return {
+        "start_epoch": (
+            start_epoch
+        ),
+
+        "end_epoch": (
+            end_epoch
+        ),
+
+        "start": (
+            epoch_to_iso(
+                start_epoch
+            )
+        ),
+
+        "end": (
+            epoch_to_iso(
+                end_epoch
+            )
+        ),
+
+        "query_mode": (
+            query_mode
+        ),
+
+        "was_clamped": (
+            was_clamped
+        ),
+
+        "max_window_minutes": (
+            PHONE_HISTORY_MAX_MINUTES
+        )
+    }, None
 
 
 def get_screen_state_duration(
@@ -763,12 +1192,46 @@ def get_screen_state_duration(
 
 def build_phone_timeline(
     minutes=60,
-    limit=20
+    limit=PHONE_TIMELINE_DEFAULT_LIMIT
 ):
+    try:
+        minutes = int(
+            minutes
+        )
+
+    except Exception:
+        minutes = 60
+
+    try:
+        limit = int(
+            limit
+        )
+
+    except Exception:
+        limit = (
+            PHONE_TIMELINE_DEFAULT_LIMIT
+        )
+
+    minutes = max(
+        1,
+        min(
+            minutes,
+            PHONE_TIMELINE_MAX_MINUTES
+        )
+    )
+
+    limit = max(
+        1,
+        min(
+            limit,
+            PHONE_TIMELINE_MAX_LIMIT
+        )
+    )
+
     raw_events = (
         load_recent_phone_events(
             minutes=minutes,
-            limit=100
+            limit=limit
         )
     )
 
@@ -830,9 +1293,7 @@ def build_phone_timeline(
             item
         )
 
-    return timeline[
-        -limit:
-    ]
+    return timeline
 
 
 def build_recent_apps(
@@ -842,7 +1303,7 @@ def build_recent_apps(
     events = (
         load_recent_phone_events(
             minutes=minutes,
-            limit=100
+            limit=200
         )
     )
 
@@ -1975,13 +2436,6 @@ def build_place_relations(
 
 # =========================
 # Personal Place 趋势
-#
-# 收口版原则：
-#
-# 1. 不拿 GPS 边界抖动当真实进出
-# 2. accuracy 会生成一个 uncertainty buffer
-# 3. 只有明确进入内圈 / 离开外圈才算 crossing
-# 4. approaching / moving_away 也必须超过误差
 # =========================
 
 def _safe_accuracy(
@@ -2006,20 +2460,6 @@ def _place_boundary_state(
     radius_m,
     accuracy_m
 ):
-    """
-    三态地点边界：
-
-    inside:
-        明确在地点范围内
-
-    outside:
-        明确在地点范围外
-
-    uncertain:
-        当前 GPS 精度覆盖了边界，
-        不足以确认是否真的发生进出
-    """
-
     accuracy = (
         _safe_accuracy(
             accuracy_m
@@ -2029,7 +2469,6 @@ def _place_boundary_state(
     if accuracy is None:
         accuracy = 30.0
 
-    # 避免极差 GPS 把地点边界撑到无限大
     uncertainty = max(
         15.0,
         min(
@@ -2202,8 +2641,6 @@ def build_place_trends(
         first_entered_at = None
         first_left_at = None
 
-        # 只追踪“明确 inside / outside”
-        # uncertain 样本不触发状态翻转
         previous_certain_state = None
 
         for sample in distances:
@@ -2312,9 +2749,6 @@ def build_place_trends(
             )
         )
 
-        # 距离变化阈值必须同时超过：
-        # 100m 基础阈值
-        # GPS 误差的 1.5 倍
         meaningful_change = max(
             100.0,
             trend_uncertainty * 1.5
@@ -4013,18 +4447,39 @@ def reality_phone_timeline():
     except Exception:
         minutes = 60
 
+    try:
+        limit = int(
+            request.args.get(
+                "limit",
+                PHONE_TIMELINE_DEFAULT_LIMIT
+            )
+        )
+
+    except Exception:
+        limit = (
+            PHONE_TIMELINE_DEFAULT_LIMIT
+        )
+
     minutes = max(
         1,
         min(
             minutes,
-            1440
+            PHONE_TIMELINE_MAX_MINUTES
+        )
+    )
+
+    limit = max(
+        1,
+        min(
+            limit,
+            PHONE_TIMELINE_MAX_LIMIT
         )
     )
 
     timeline = (
         build_phone_timeline(
             minutes=minutes,
-            limit=100
+            limit=limit
         )
     )
 
@@ -4039,6 +4494,10 @@ def reality_phone_timeline():
             minutes
         ),
 
+        "requested_limit": (
+            limit
+        ),
+
         "event_count": (
             len(
                 timeline
@@ -4048,6 +4507,158 @@ def reality_phone_timeline():
         "timeline": (
             timeline
         )
+    })
+
+
+# =========================
+# Short-term History 2.0
+# =========================
+
+@app.route(
+    "/reality/phone/history",
+    methods=["GET"]
+)
+def reality_phone_history():
+    auth_error = check_token()
+
+    if auth_error:
+        return auth_error
+
+    time_range, error = (
+        get_phone_history_time_range()
+    )
+
+    if error:
+        return jsonify(
+            error
+        ), 400
+
+    selected_types = (
+        request.args.get(
+            "types",
+            "all"
+        )
+    )
+
+    include_timeline = (
+        parse_bool_query(
+            request.args.get(
+                "include_timeline"
+            ),
+            default=False
+        )
+    )
+
+    try:
+        timeline_limit = int(
+            request.args.get(
+                "timeline_limit",
+                200
+            )
+        )
+
+    except Exception:
+        timeline_limit = 200
+
+    timeline_limit = max(
+        1,
+        min(
+            timeline_limit,
+            1000
+        )
+    )
+
+    events = (
+        load_phone_history_events(
+            time_range[
+                "start_epoch"
+            ],
+            time_range[
+                "end_epoch"
+            ]
+        )
+    )
+
+    history = (
+        build_phone_history_summary(
+            events=events,
+
+            start_epoch=(
+                time_range[
+                    "start_epoch"
+                ]
+            ),
+
+            end_epoch=(
+                time_range[
+                    "end_epoch"
+                ]
+            ),
+
+            types=selected_types,
+
+            include_timeline=(
+                include_timeline
+            ),
+
+            timeline_limit=(
+                timeline_limit
+            )
+        )
+    )
+
+    return jsonify({
+        "status": "ok",
+
+        "generated_at": (
+            utc_now_iso()
+        ),
+
+        "query": {
+            "mode": (
+                time_range[
+                    "query_mode"
+                ]
+            ),
+
+            "start": (
+                time_range[
+                    "start"
+                ]
+            ),
+
+            "end": (
+                time_range[
+                    "end"
+                ]
+            ),
+
+            "was_clamped": (
+                time_range[
+                    "was_clamped"
+                ]
+            ),
+
+            "max_window_minutes": (
+                time_range[
+                    "max_window_minutes"
+                ]
+            ),
+
+            "types": (
+                selected_types
+            ),
+
+            "include_timeline": (
+                include_timeline
+            ),
+
+            "timeline_limit": (
+                timeline_limit
+            )
+        },
+
+        "history": history
     })
 
 
@@ -4949,12 +5560,6 @@ def reality_spatial_nearby():
 
 # =========================
 # Route
-#
-# destination 支持：
-#
-# 1. ?place=家
-# 2. ?latitude=...&longitude=...
-# 3. ?poi_location=116.xxx,29.xxx
 # =========================
 
 @app.route(
@@ -5022,10 +5627,6 @@ def reality_spatial_route():
             "poi_name"
         )
     )
-
-    # =========================
-    # 路线到高德 POI
-    # =========================
 
     if poi_location:
         parsed = (
@@ -5155,10 +5756,6 @@ def reality_spatial_route():
             "route": route_result
         })
 
-    # =========================
-    # 路线到 Personal Place
-    # =========================
-
     if place_name:
         place = (
             find_personal_place(
@@ -5268,10 +5865,6 @@ def reality_spatial_route():
 
             "route": route_result
         })
-
-    # =========================
-    # 路线到手动 WGS84 坐标
-    # =========================
 
     try:
         destination_latitude = float(
@@ -5780,9 +6373,28 @@ def phone_timeline_check():
                 <input
                     type="number"
                     name="minutes"
-                    value="10"
+                    value="360"
                     min="1"
-                    max="1440"
+                    max="2880"
+                    style="
+                        width: 100%;
+                        padding: 10px;
+                        box-sizing: border-box;
+                    "
+                >
+
+                <br><br>
+
+                <label>
+                    Limit:
+                </label>
+
+                <input
+                    type="number"
+                    name="limit"
+                    value="500"
+                    min="1"
+                    max="1000"
                     style="
                         width: 100%;
                         padding: 10px;
@@ -5826,25 +6438,44 @@ def phone_timeline_check():
         minutes = int(
             request.form.get(
                 "minutes",
-                10
+                360
             )
         )
 
     except Exception:
-        minutes = 10
+        minutes = 360
+
+    try:
+        limit = int(
+            request.form.get(
+                "limit",
+                500
+            )
+        )
+
+    except Exception:
+        limit = 500
 
     minutes = max(
         1,
         min(
             minutes,
-            1440
+            PHONE_TIMELINE_MAX_MINUTES
+        )
+    )
+
+    limit = max(
+        1,
+        min(
+            limit,
+            PHONE_TIMELINE_MAX_LIMIT
         )
     )
 
     timeline = (
         build_phone_timeline(
             minutes=minutes,
-            limit=100
+            limit=limit
         )
     )
 
@@ -5857,6 +6488,10 @@ def phone_timeline_check():
 
         "window_minutes": (
             minutes
+        ),
+
+        "requested_limit": (
+            limit
         ),
 
         "event_count": (
