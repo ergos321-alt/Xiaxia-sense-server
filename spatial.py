@@ -1257,15 +1257,6 @@ def route(
 
 # =========================
 # POI 场景分类
-#
-# 不再使用“命中第一个类型”
-# 改为：
-#
-# POI 类型权重
-# ×
-# 距离权重
-#
-# 最终产生主场景 + 次级场景
 # =========================
 
 SCENE_RULES = {
@@ -1554,15 +1545,13 @@ def classify_scene(
 #
 # 核心原则：
 #
-# 1. GPS 点之间的距离必须先扣除
-#    定位精度造成的不确定区间。
-#
-# 2. Activity=stationary 时，
-#    GPS 必须提供更强证据才能宣布移动。
-#
-# 3. GPS 精度很差时，
-#    宁愿输出 uncertain，
-#    也不制造虚假移动。
+# 1. 累计路径只能作为辅助证据
+# 2. 净位移比累计路径更重要
+# 3. Activity=stationary 时，
+#    必须有持续、方向一致、明显净位移
+#    才能推翻静止判断
+# 4. GPS 精度差时宁愿 uncertain
+#    也不制造虚假移动
 # =========================
 
 def analyze_movement(
@@ -1591,6 +1580,12 @@ def analyze_movement(
 
     valid_segment_count = 0
     ignored_segment_count = 0
+
+    significant_segments = []
+
+    # =========================
+    # 分段处理
+    # =========================
 
     for (
         first,
@@ -1641,7 +1636,6 @@ def analyze_movement(
             )
 
             ignored_segment_count += 1
-
             continue
 
         effective_distance = max(
@@ -1649,14 +1643,30 @@ def analyze_movement(
             segment - uncertainty
         )
 
-        if effective_distance <= 10:
+        if effective_distance < 15:
             ignored_drift_distance += (
                 segment
             )
 
             ignored_segment_count += 1
-
             continue
+
+        segment_bearing = (
+            bearing_deg(
+                first.get(
+                    "latitude"
+                ),
+                first.get(
+                    "longitude"
+                ),
+                second.get(
+                    "latitude"
+                ),
+                second.get(
+                    "longitude"
+                )
+            )
+        )
 
         filtered_path_distance += (
             effective_distance
@@ -1664,13 +1674,21 @@ def analyze_movement(
 
         valid_segment_count += 1
 
-    first = (
-        history[0]
-    )
+        significant_segments.append({
+            "distance_m": (
+                effective_distance
+            ),
+            "bearing_deg": (
+                segment_bearing
+            )
+        })
 
-    last = (
-        history[-1]
-    )
+    # =========================
+    # 起终点净位移
+    # =========================
+
+    first = history[0]
+    last = history[-1]
 
     raw_net_displacement = (
         haversine_m(
@@ -1689,26 +1707,14 @@ def analyze_movement(
         )
     )
 
-    first_accuracy = (
-        _safe_float(
+    endpoint_uncertainty = (
+        segment_uncertainty_m(
             first.get(
                 "accuracy_m"
-            )
-        )
-    )
-
-    last_accuracy = (
-        _safe_float(
+            ),
             last.get(
                 "accuracy_m"
             )
-        )
-    )
-
-    endpoint_uncertainty = (
-        segment_uncertainty_m(
-            first_accuracy,
-            last_accuracy
         )
     )
 
@@ -1724,6 +1730,10 @@ def analyze_movement(
             - endpoint_uncertainty
         )
 
+    # =========================
+    # 时间窗口
+    # =========================
+
     duration_seconds = max(
         0,
         last.get(
@@ -1736,30 +1746,9 @@ def analyze_movement(
         )
     )
 
-    bearing = None
-
-    if (
-        effective_net_displacement
-        is not None
-        and effective_net_displacement
-        >= 30
-    ):
-        bearing = (
-            bearing_deg(
-                first.get(
-                    "latitude"
-                ),
-                first.get(
-                    "longitude"
-                ),
-                last.get(
-                    "latitude"
-                ),
-                last.get(
-                    "longitude"
-                )
-            )
-        )
+    # =========================
+    # 平均定位精度
+    # =========================
 
     accuracy_values = [
         _safe_float(
@@ -1795,6 +1784,116 @@ def analyze_movement(
         )
     )
 
+    # =========================
+    # 方向一致性
+    # =========================
+
+    direction_consistency = 0.0
+
+    if (
+        significant_segments
+        and len(
+            significant_segments
+        ) >= 2
+    ):
+        vectors_x = 0.0
+        vectors_y = 0.0
+        total_weight = 0.0
+
+        for segment in significant_segments:
+
+            bearing = (
+                segment.get(
+                    "bearing_deg"
+                )
+            )
+
+            distance = (
+                segment.get(
+                    "distance_m"
+                )
+            )
+
+            if (
+                bearing is None
+                or distance is None
+            ):
+                continue
+
+            rad = (
+                math.radians(
+                    bearing
+                )
+            )
+
+            vectors_x += (
+                math.cos(rad)
+                * distance
+            )
+
+            vectors_y += (
+                math.sin(rad)
+                * distance
+            )
+
+            total_weight += (
+                distance
+            )
+
+        if total_weight > 0:
+            resultant = (
+                math.sqrt(
+                    vectors_x ** 2
+                    + vectors_y ** 2
+                )
+            )
+
+            direction_consistency = (
+                resultant
+                / total_weight
+            )
+
+    direction_consistency = max(
+        0.0,
+        min(
+            direction_consistency,
+            1.0
+        )
+    )
+
+    # =========================
+    # 最终方向
+    # =========================
+
+    final_bearing = None
+
+    if (
+        effective_net_displacement
+        is not None
+        and effective_net_displacement
+        >= 40
+    ):
+        final_bearing = (
+            bearing_deg(
+                first.get(
+                    "latitude"
+                ),
+                first.get(
+                    "longitude"
+                ),
+                last.get(
+                    "latitude"
+                ),
+                last.get(
+                    "longitude"
+                )
+            )
+        )
+
+    # =========================
+    # Activity
+    # =========================
+
     activity_moving_states = (
         "walking",
         "running",
@@ -1813,57 +1912,123 @@ def analyze_movement(
     )
 
     # =========================
-    # 融合判定
+    # 移动证据等级
+    #
+    # 真移动应体现为：
+    #
+    # 有明显净位移
+    # +
+    # 有方向一致性
+    #
+    # 单纯累计路径大，
+    # 不再足以宣布 moving。
     # =========================
 
-    movement_evidence_strong = (
-        filtered_path_distance
-        >= 150
-        or (
-            effective_net_displacement
-            is not None
-            and effective_net_displacement
-            >= 100
-        )
+    strong_net_movement = (
+        effective_net_displacement
+        is not None
+        and effective_net_displacement
+        >= 120
     )
 
-    movement_evidence_medium = (
-        filtered_path_distance
+    medium_net_movement = (
+        effective_net_displacement
+        is not None
+        and effective_net_displacement
         >= 60
-        or (
-            effective_net_displacement
-            is not None
-            and effective_net_displacement
-            >= 50
-        )
     )
+
+    weak_net_movement = (
+        effective_net_displacement
+        is not None
+        and effective_net_displacement
+        >= 30
+    )
+
+    directional_movement_strong = (
+        direction_consistency
+        >= 0.60
+        and filtered_path_distance
+        >= 120
+    )
+
+    directional_movement_medium = (
+        direction_consistency
+        >= 0.45
+        and filtered_path_distance
+        >= 70
+    )
+
+    # =========================
+    # 最终融合判定
+    # =========================
 
     if activity_says_stationary:
 
+        # Activity 明确静止时，
+        # 必须有真正强的“离开原位置”证据
+        # 才能推翻 stationary。
+
         if (
-            location_quality == "poor"
-            and not movement_evidence_strong
+            strong_net_movement
+            and directional_movement_strong
         ):
-            trend = "stable"
+            trend = "moving"
             confidence = "medium"
 
-        elif movement_evidence_strong:
+        elif (
+            medium_net_movement
+            and direction_consistency
+            >= 0.70
+            and filtered_path_distance
+            >= 150
+        ):
             trend = "moving"
             confidence = "medium"
 
         else:
             trend = "stable"
-            confidence = "high"
+
+            if location_quality in (
+                "good",
+                "usable"
+            ):
+                confidence = "high"
+
+            else:
+                confidence = "medium"
 
     elif activity_says_moving:
 
-        if movement_evidence_medium:
+        # Activity 明确移动。
+        # 即使 GPS 很差，也不应轻易否决，
+        # 但置信度会降低。
+
+        if (
+            strong_net_movement
+            and directional_movement_medium
+        ):
             trend = "moving"
             confidence = "high"
 
-        elif location_quality == "poor":
+        elif (
+            medium_net_movement
+            or directional_movement_medium
+        ):
+            trend = "moving"
+            confidence = "high"
+
+        elif (
+            weak_net_movement
+            or filtered_path_distance
+            >= 40
+        ):
             trend = "moving"
             confidence = "medium"
+
+        elif location_quality == "poor":
+            trend = "moving"
+            confidence = "low"
 
         else:
             trend = "moving"
@@ -1871,21 +2036,36 @@ def analyze_movement(
 
     else:
 
-        if movement_evidence_strong:
+        # Activity 未提供可靠结论时，
+        # 完全依赖空间证据。
+
+        if (
+            strong_net_movement
+            and directional_movement_medium
+        ):
             trend = "moving"
             confidence = "high"
 
-        elif movement_evidence_medium:
+        elif (
+            medium_net_movement
+            and directional_movement_medium
+        ):
             trend = "moving"
             confidence = "medium"
 
-        elif location_quality == "poor":
+        elif (
+            location_quality == "poor"
+        ):
             trend = "uncertain"
             confidence = "low"
 
         else:
             trend = "stable"
             confidence = "medium"
+
+    # =========================
+    # 返回
+    # =========================
 
     return {
         "available": True,
@@ -1975,20 +2155,27 @@ def analyze_movement(
             else None
         ),
 
+        "direction_consistency": (
+            round(
+                direction_consistency,
+                3
+            )
+        ),
+
         "bearing_deg": (
-            bearing
+            final_bearing
         ),
 
         "direction": (
             bearing_label(
-                bearing
+                final_bearing
             )
         )
     }
 
 
 # =========================
-# 与个人地点关系
+# Spatial 描述
 # =========================
 
 def build_spatial_description(
