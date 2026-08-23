@@ -1,7 +1,9 @@
 import os
 import json
-import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+
+import psycopg
+from psycopg.rows import dict_row
 
 from flask import Flask, request, jsonify
 from semantic import build_semantic_context
@@ -16,14 +18,14 @@ app = Flask(__name__)
 # 基础配置
 # =========================
 
-SENSE_TOKEN = os.environ.get("SENSE_TOKEN", "")
+SENSE_TOKEN = os.environ.get(
+    "SENSE_TOKEN",
+    ""
+)
 
-DATA_DIR = os.environ.get("DATA_DIR", "/tmp")
-os.makedirs(DATA_DIR, exist_ok=True)
-
-DB_PATH = os.path.join(
-    DATA_DIR,
-    "xiaxia_sense.db"
+DATABASE_URL = os.environ.get(
+    "DATABASE_URL",
+    ""
 )
 
 
@@ -41,6 +43,17 @@ FRESHNESS_THRESHOLDS = {
 DEFAULT_FRESHNESS_SECONDS = 300
 
 PHONE_ACTIVITY_FRESH_SECONDS = 43200
+
+
+# =========================
+# Housekeeping 配置
+# =========================
+
+MESSAGE_RETENTION_SECONDS = 6 * 60 * 60
+PHONE_EVENT_RETENTION_SECONDS = 48 * 60 * 60
+HOUSEKEEPING_INTERVAL_SECONDS = 10 * 60
+
+_last_housekeeping_epoch = 0
 
 
 # =========================
@@ -174,20 +187,70 @@ def phone_freshness_info(
 
 
 # =========================
+# PostgreSQL 兼容包装
+# =========================
+
+class DatabaseConnection:
+
+    def __init__(
+        self,
+        connection
+    ):
+        self.connection = connection
+
+    def execute(
+        self,
+        query,
+        params=None
+    ):
+        postgres_query = query.replace(
+            "?",
+            "%s"
+        )
+
+        if params is None:
+            params = ()
+
+        return self.connection.execute(
+            postgres_query,
+            params
+        )
+
+    def commit(self):
+        self.connection.commit()
+
+    def rollback(self):
+        self.connection.rollback()
+
+    def close(self):
+        self.connection.close()
+
+
+# =========================
 # 数据库
 # =========================
 
 def get_db():
-    conn = sqlite3.connect(
-        DB_PATH
+    if not DATABASE_URL:
+        raise RuntimeError(
+            "DATABASE_URL is not configured"
+        )
+
+    raw_conn = psycopg.connect(
+        DATABASE_URL,
+        row_factory=dict_row,
+        sslmode="require",
+        connect_timeout=10
     )
 
-    conn.row_factory = sqlite3.Row
+    conn = DatabaseConnection(
+        raw_conn
+    )
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            message_id INTEGER,
+            id BIGSERIAL PRIMARY KEY,
+            message_id BIGINT,
             session_id TEXT,
             device_id TEXT,
             received_at TEXT NOT NULL,
@@ -196,11 +259,17 @@ def get_db():
     """)
 
     conn.execute("""
+        CREATE INDEX IF NOT EXISTS
+        idx_messages_received_at
+        ON messages (received_at)
+    """)
+
+    conn.execute("""
         CREATE TABLE IF NOT EXISTS sensor_latest (
             sensor_name TEXT PRIMARY KEY,
-            sensor_time_ns INTEGER NOT NULL,
+            sensor_time_ns BIGINT NOT NULL,
             values_json TEXT NOT NULL,
-            message_id INTEGER,
+            message_id BIGINT,
             session_id TEXT,
             device_id TEXT,
             updated_at TEXT NOT NULL
@@ -209,35 +278,26 @@ def get_db():
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS phone_activity_latest (
-            id INTEGER PRIMARY KEY
-                CHECK (id = 1),
-
+            id INTEGER PRIMARY KEY CHECK (id = 1),
             screen TEXT,
             locked TEXT,
-
-            last_interaction INTEGER,
-
+            last_interaction BIGINT,
             app_name TEXT,
             app_package TEXT,
-            app_since INTEGER,
-
+            app_since BIGINT,
             updated_at TEXT NOT NULL
         )
     """)
 
     conn.execute("""
         CREATE TABLE IF NOT EXISTS phone_activity_events (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-
+            id BIGSERIAL PRIMARY KEY,
             event_type TEXT NOT NULL,
-
             screen TEXT,
             locked TEXT,
-
             app_name TEXT,
             app_package TEXT,
-
-            event_time INTEGER NOT NULL,
+            event_time BIGINT NOT NULL,
             received_at TEXT NOT NULL
         )
     """)
@@ -245,15 +305,67 @@ def get_db():
     conn.execute("""
         CREATE INDEX IF NOT EXISTS
         idx_phone_activity_events_time
-
-        ON phone_activity_events (
-            event_time
-        )
+        ON phone_activity_events (event_time)
     """)
 
     conn.commit()
 
     return conn
+
+
+# =========================
+# Housekeeping
+# =========================
+
+def run_housekeeping(
+    conn,
+    force=False
+):
+    global _last_housekeeping_epoch
+
+    now_epoch = utc_now_epoch()
+
+    if (
+        not force
+        and _last_housekeeping_epoch
+        and (
+            now_epoch
+            - _last_housekeeping_epoch
+        ) < HOUSEKEEPING_INTERVAL_SECONDS
+    ):
+        return
+
+    message_cutoff = (
+        datetime.now(
+            timezone.utc
+        )
+        - timedelta(
+            seconds=MESSAGE_RETENTION_SECONDS
+        )
+    ).isoformat()
+
+    phone_event_cutoff = (
+        now_epoch
+        - PHONE_EVENT_RETENTION_SECONDS
+    )
+
+    conn.execute("""
+        DELETE FROM messages
+        WHERE received_at < ?
+    """, (
+        message_cutoff,
+    ))
+
+    conn.execute("""
+        DELETE FROM phone_activity_events
+        WHERE event_time < ?
+    """, (
+        phone_event_cutoff,
+    ))
+
+    _last_housekeeping_epoch = (
+        now_epoch
+    )
 
 
 # =========================
@@ -304,9 +416,7 @@ def load_latest_sensors():
             sensor_time_ns,
             values_json,
             updated_at
-
         FROM sensor_latest
-
         ORDER BY sensor_name
     """).fetchall()
 
@@ -356,8 +466,7 @@ def load_latest_sensors():
 
 
 # =========================
-# Phone Activity
-# 事件读取
+# Phone Activity 事件读取
 # =========================
 
 def load_recent_phone_events(
@@ -382,13 +491,9 @@ def load_recent_phone_events(
             app_package,
             event_time,
             received_at
-
         FROM phone_activity_events
-
         WHERE event_time >= ?
-
         ORDER BY event_time DESC
-
         LIMIT ?
     """, (
         cutoff,
@@ -469,13 +574,9 @@ def get_screen_state_duration(
 
     row = conn.execute("""
         SELECT event_time
-
         FROM phone_activity_events
-
         WHERE event_type = ?
-
         ORDER BY event_time DESC
-
         LIMIT 1
     """, (
         event_type,
@@ -574,9 +675,6 @@ def build_phone_timeline(
 
 # =========================
 # 最近使用过的 App
-#
-# 这里只做简短列表。
-# V1 不做完整使用时长统计。
 # =========================
 
 def build_recent_apps(
@@ -643,11 +741,6 @@ def build_recent_apps(
 
 # =========================
 # Phone Activity Summary
-#
-# 这里只总结手机事实状态。
-# 不判断用户：
-# 睡着 / 偷懒 / 工作 /
-# 撒谎 / 需要什么。
 # =========================
 
 def build_phone_activity_summary(
@@ -676,22 +769,19 @@ def build_phone_activity_summary(
         )
     )
 
-    app_name = (
+    current_app = (
         phone_activity.get(
-            "current_app",
-            {}
-        ).get(
-            "app_name"
+            "current_app"
         )
+        or {}
     )
 
-    app_duration = (
-        phone_activity.get(
-            "current_app",
-            {}
-        ).get(
-            "duration_minutes"
-        )
+    app_name = current_app.get(
+        "app_name"
+    )
+
+    app_duration = current_app.get(
+        "duration_minutes"
     )
 
     freshness = (
@@ -802,9 +892,7 @@ def load_phone_activity():
             app_package,
             app_since,
             updated_at
-
         FROM phone_activity_latest
-
         WHERE id = 1
     """).fetchone()
 
@@ -891,21 +979,17 @@ def load_phone_activity():
             "app_name": (
                 row["app_name"]
             ),
-
             "package_name": (
                 row["app_package"]
             ),
-
             "started_at": (
                 epoch_to_iso(
                     app_since
                 )
             ),
-
             "duration_seconds": (
                 app_duration_seconds
             ),
-
             "duration_minutes": (
                 app_duration_minutes
             )
@@ -913,7 +997,6 @@ def load_phone_activity():
 
     return {
         "screen": row["screen"],
-
         "locked": locked,
 
         "screen_state_duration_seconds": (
@@ -1109,7 +1192,6 @@ def receive_data():
             received_at,
             raw_json
         )
-
         VALUES (?, ?, ?, ?, ?)
     """, (
         message_id,
@@ -1164,9 +1246,7 @@ def receive_data():
 
             old = conn.execute("""
                 SELECT sensor_time_ns
-
                 FROM sensor_latest
-
                 WHERE sensor_name = ?
             """, (
                 sensor_name,
@@ -1189,29 +1269,21 @@ def receive_data():
                         device_id,
                         updated_at
                     )
-
                     VALUES (
                         ?, ?, ?, ?, ?, ?, ?
                     )
-
                     ON CONFLICT(sensor_name)
-
                     DO UPDATE SET
                         sensor_time_ns =
                             excluded.sensor_time_ns,
-
                         values_json =
                             excluded.values_json,
-
                         message_id =
                             excluded.message_id,
-
                         session_id =
                             excluded.session_id,
-
                         device_id =
                             excluded.device_id,
-
                         updated_at =
                             excluded.updated_at
                 """, (
@@ -1231,12 +1303,15 @@ def receive_data():
                     sensor_name
                 )
 
+    run_housekeeping(
+        conn
+    )
+
     conn.commit()
     conn.close()
 
     return jsonify({
         "status": "ok",
-
         "received": (
             len(payload)
             if isinstance(
@@ -1245,7 +1320,6 @@ def receive_data():
             )
             else 0
         ),
-
         "updated_sensors": (
             updated_sensors
         )
@@ -1373,9 +1447,7 @@ def receive_phone_activity():
             app_name,
             app_package,
             app_since
-
         FROM phone_activity_latest
-
         WHERE id = 1
     """).fetchone()
 
@@ -1436,33 +1508,24 @@ def receive_phone_activity():
             app_since,
             updated_at
         )
-
         VALUES (
             1,
             ?, ?, ?, ?, ?, ?, ?
         )
-
         ON CONFLICT(id)
-
         DO UPDATE SET
             screen =
                 excluded.screen,
-
             locked =
                 excluded.locked,
-
             last_interaction =
                 excluded.last_interaction,
-
             app_name =
                 excluded.app_name,
-
             app_package =
                 excluded.app_package,
-
             app_since =
                 excluded.app_since,
-
             updated_at =
                 excluded.updated_at
     """, (
@@ -1487,7 +1550,6 @@ def receive_phone_activity():
                 event_time,
                 received_at
             )
-
             VALUES (
                 ?, ?, ?, ?, ?, ?, ?
             )
@@ -1500,6 +1562,10 @@ def receive_phone_activity():
             event_time,
             received_at
         ))
+
+    run_housekeeping(
+        conn
+    )
 
     conn.commit()
     conn.close()
@@ -1535,33 +1601,26 @@ def context():
 
     return jsonify({
         "status": "ok",
-
         "generated_at": (
             utc_now_iso()
         ),
-
         "sensors": (
             current["sensors"]
         ),
-
         "semantic": (
             current["semantic"]
         ),
-
         "weather": (
             current["weather"]
         ),
-
         "reality": (
             current["reality"]
         ),
-
         "phone_activity": (
             current[
                 "phone_activity"
             ]
         ),
-
         "phone_activity_summary": (
             current[
                 "phone_activity_summary"
@@ -1590,21 +1649,17 @@ def reality_context():
 
     return jsonify({
         "status": "ok",
-
         "generated_at": (
             utc_now_iso()
         ),
-
         "reality": (
             current["reality"]
         ),
-
         "phone_activity": (
             current[
                 "phone_activity"
             ]
         ),
-
         "phone_activity_summary": (
             current[
                 "phone_activity_summary"
@@ -1637,25 +1692,21 @@ def reality_summary():
 
     return jsonify({
         "status": "ok",
-
         "generated_at": (
             utc_now_iso()
         ),
-
         "summary": (
             reality.get(
                 "summary",
                 {}
             )
         ),
-
         "inferences": (
             reality.get(
                 "inferences",
                 {}
             )
         ),
-
         "phone_activity_summary": (
             current[
                 "phone_activity_summary"
@@ -1714,25 +1765,21 @@ def reality_environment():
 
     return jsonify({
         "status": "ok",
-
         "generated_at": (
             utc_now_iso()
         ),
-
         "environment": (
             reality.get(
                 "environment",
                 {}
             )
         ),
-
         "weather": (
             reality.get(
                 "weather",
                 {}
             )
         ),
-
         "summary": (
             relevant_summary
         )
@@ -1787,25 +1834,21 @@ def reality_device():
 
     return jsonify({
         "status": "ok",
-
         "generated_at": (
             utc_now_iso()
         ),
-
         "device": (
             reality.get(
                 "device",
                 {}
             )
         ),
-
         "network": (
             reality.get(
                 "network",
                 {}
             )
         ),
-
         "summary": (
             relevant_summary
         )
@@ -1841,30 +1884,25 @@ def reality_location():
 
     return jsonify({
         "status": "ok",
-
         "generated_at": (
             utc_now_iso()
         ),
-
         "location": (
             reality.get(
                 "location",
                 {}
             )
         ),
-
         "location_quality": (
             summary.get(
                 "location_quality"
             )
         ),
-
         "mobility": (
             summary.get(
                 "mobility"
             )
         ),
-
         "mobility_description": (
             summary.get(
                 "mobility_description"
@@ -1893,17 +1931,14 @@ def reality_phone():
 
     return jsonify({
         "status": "ok",
-
         "generated_at": (
             utc_now_iso()
         ),
-
         "phone_activity": (
             current[
                 "phone_activity"
             ]
         ),
-
         "phone_activity_summary": (
             current[
                 "phone_activity_summary"
@@ -1954,19 +1989,15 @@ def reality_phone_timeline():
 
     return jsonify({
         "status": "ok",
-
         "generated_at": (
             utc_now_iso()
         ),
-
         "window_minutes": (
             minutes
         ),
-
         "event_count": (
             len(timeline)
         ),
-
         "timeline": (
             timeline
         )
@@ -2079,48 +2110,37 @@ def reality_status():
 
     return jsonify({
         "status": "ok",
-
         "service": (
             "xiaxia-sense-server"
         ),
-
         "generated_at": (
             utc_now_iso()
         ),
-
         "sensor_state": (
             overall_sensor_state
         ),
-
         "sensor_count": (
             len(sensors)
         ),
-
         "fresh_sensor_count": (
             fresh_count
         ),
-
         "stale_sensor_count": (
             stale_count
         ),
-
         "unknown_sensor_count": (
             unknown_count
         ),
-
         "latest_sensor_update": (
             newest_update
         ),
-
         "sensors": (
             sensor_status
         ),
-
         "phone_activity_status": {
             "available": bool(
                 phone_activity
             ),
-
             "freshness": (
                 phone_activity.get(
                     "freshness"
@@ -2128,7 +2148,6 @@ def reality_status():
                 if phone_activity
                 else "unknown"
             ),
-
             "age_seconds": (
                 phone_activity.get(
                     "age_seconds"
@@ -2136,7 +2155,6 @@ def reality_status():
                 if phone_activity
                 else None
             ),
-
             "updated_at": (
                 phone_activity.get(
                     "last_updated"
@@ -2236,33 +2254,26 @@ def context_check():
 
     return jsonify({
         "status": "ok",
-
         "generated_at": (
             utc_now_iso()
         ),
-
         "sensors": (
             current["sensors"]
         ),
-
         "semantic": (
             current["semantic"]
         ),
-
         "weather": (
             current["weather"]
         ),
-
         "reality": (
             current["reality"]
         ),
-
         "phone_activity": (
             current[
                 "phone_activity"
             ]
         ),
-
         "phone_activity_summary": (
             current[
                 "phone_activity_summary"
@@ -2399,19 +2410,15 @@ def phone_timeline_check():
 
     return jsonify({
         "status": "ok",
-
         "generated_at": (
             utc_now_iso()
         ),
-
         "window_minutes": (
             minutes
         ),
-
         "event_count": (
             len(timeline)
         ),
-
         "timeline": (
             timeline
         )
