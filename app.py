@@ -169,7 +169,6 @@ def freshness_info(
 
         return {
             "age_seconds": age_seconds,
-
             "freshness": (
                 "fresh"
                 if age_seconds <= threshold
@@ -211,7 +210,6 @@ def phone_freshness_info(
 
         return {
             "age_seconds": age_seconds,
-
             "freshness": (
                 "fresh"
                 if age_seconds
@@ -237,9 +235,7 @@ class DatabaseConnection:
         self,
         connection
     ):
-        self.connection = (
-            connection
-        )
+        self.connection = connection
 
     def execute(
         self,
@@ -477,9 +473,7 @@ def run_housekeeping(
         spatial_cutoff,
     ))
 
-    _last_housekeeping_epoch = (
-        now_epoch
-    )
+    _last_housekeeping_epoch = now_epoch
 
 
 # =========================
@@ -489,10 +483,7 @@ def run_housekeeping(
 def check_token():
     if not SENSE_TOKEN:
         return jsonify({
-            "error": (
-                "server_not_configured"
-            ),
-
+            "error": "server_not_configured",
             "message": (
                 "SENSE_TOKEN is not configured"
             )
@@ -793,10 +784,7 @@ def build_phone_timeline(
         )
 
         item = {
-            "event": (
-                event_type
-            ),
-
+            "event": event_type,
             "at": (
                 event.get(
                     "event_at"
@@ -893,9 +881,7 @@ def build_recent_apps(
         )
 
         recent_apps.append({
-            "app_name": (
-                app_name
-            ),
+            "app_name": app_name,
 
             "package_name": (
                 package_name
@@ -925,14 +911,10 @@ def build_phone_activity_summary(
     if not phone_activity:
         return {
             "state": "unknown",
-
             "description": (
                 "当前没有可用的手机活动数据。"
             ),
-
-            "confidence": (
-                "low"
-            )
+            "confidence": "low"
         }
 
     screen = (
@@ -980,18 +962,12 @@ def build_phone_activity_summary(
 
     if freshness != "fresh":
         return {
-            "state": (
-                "unknown"
-            ),
-
+            "state": "unknown",
             "description": (
                 "手机活动数据已经过期，"
                 "无法可靠描述当前状态。"
             ),
-
-            "confidence": (
-                "low"
-            )
+            "confidence": "low"
         }
 
     if (
@@ -1027,15 +1003,11 @@ def build_phone_activity_summary(
             "state": (
                 "screen_on_locked"
             ),
-
             "description": (
                 "手机屏幕已亮起，"
                 "但设备当前仍处于锁定状态。"
             ),
-
-            "confidence": (
-                "high"
-            )
+            "confidence": "high"
         }
 
     if (
@@ -1072,11 +1044,9 @@ def build_phone_activity_summary(
 
     return {
         "state": "unknown",
-
         "description": (
             "手机状态信息不完整。"
         ),
-
         "confidence": "medium"
     }
 
@@ -1743,7 +1713,6 @@ def save_personal_place(
     except Exception:
         return {
             "ok": False,
-
             "error": (
                 "invalid_place_coordinates"
             )
@@ -1755,7 +1724,6 @@ def save_personal_place(
     ):
         return {
             "ok": False,
-
             "error": (
                 "coordinates_out_of_range"
             )
@@ -1801,9 +1769,7 @@ def save_personal_place(
     )).fetchone()
 
     if existing is None:
-        created_at = (
-            now
-        )
+        created_at = now
 
     else:
         created_at = (
@@ -1853,16 +1819,10 @@ def save_personal_place(
 
         "place": {
             "name": name,
-
             "kind": kind,
 
-            "latitude": (
-                latitude
-            ),
-
-            "longitude": (
-                longitude
-            ),
+            "latitude": latitude,
+            "longitude": longitude,
 
             "coordinate_system": (
                 "wgs84"
@@ -1872,17 +1832,13 @@ def save_personal_place(
                 radius_m
             ),
 
-            "note": (
-                note
-            ),
+            "note": note,
 
             "created_at": (
                 created_at
             ),
 
-            "updated_at": (
-                now
-            )
+            "updated_at": now
         }
     }
 
@@ -2002,9 +1958,7 @@ def build_place_relations(
                 status == "inside"
             ),
 
-            "status": (
-                status
-            )
+            "status": status
         })
 
     relations.sort(
@@ -2017,6 +1971,91 @@ def build_place_relations(
     )
 
     return relations
+
+
+# =========================
+# Personal Place 趋势
+#
+# 收口版原则：
+#
+# 1. 不拿 GPS 边界抖动当真实进出
+# 2. accuracy 会生成一个 uncertainty buffer
+# 3. 只有明确进入内圈 / 离开外圈才算 crossing
+# 4. approaching / moving_away 也必须超过误差
+# =========================
+
+def _safe_accuracy(
+    value
+):
+    try:
+        value = float(
+            value
+        )
+
+        if value < 0:
+            return None
+
+        return value
+
+    except Exception:
+        return None
+
+
+def _place_boundary_state(
+    distance_m,
+    radius_m,
+    accuracy_m
+):
+    """
+    三态地点边界：
+
+    inside:
+        明确在地点范围内
+
+    outside:
+        明确在地点范围外
+
+    uncertain:
+        当前 GPS 精度覆盖了边界，
+        不足以确认是否真的发生进出
+    """
+
+    accuracy = (
+        _safe_accuracy(
+            accuracy_m
+        )
+    )
+
+    if accuracy is None:
+        accuracy = 30.0
+
+    # 避免极差 GPS 把地点边界撑到无限大
+    uncertainty = max(
+        15.0,
+        min(
+            accuracy,
+            100.0
+        )
+    )
+
+    inner_radius = max(
+        0.0,
+        radius_m
+        - uncertainty
+    )
+
+    outer_radius = (
+        radius_m
+        + uncertainty
+    )
+
+    if distance_m <= inner_radius:
+        return "inside"
+
+    if distance_m >= outer_radius:
+        return "outside"
+
+    return "uncertain"
 
 
 def build_place_trends(
@@ -2086,9 +2125,33 @@ def build_place_trends(
             if distance is None:
                 continue
 
+            accuracy_m = (
+                _safe_accuracy(
+                    point.get(
+                        "accuracy_m"
+                    )
+                )
+            )
+
+            boundary_state = (
+                _place_boundary_state(
+                    distance,
+                    radius_m,
+                    accuracy_m
+                )
+            )
+
             distances.append({
                 "distance_m": (
                     distance
+                ),
+
+                "accuracy_m": (
+                    accuracy_m
+                ),
+
+                "boundary_state": (
+                    boundary_state
                 ),
 
                 "recorded_at": (
@@ -2103,14 +2166,22 @@ def build_place_trends(
         ) < 2:
             continue
 
+        first_sample = (
+            distances[0]
+        )
+
+        last_sample = (
+            distances[-1]
+        )
+
         start_distance = (
-            distances[0][
+            first_sample[
                 "distance_m"
             ]
         )
 
         end_distance = (
-            distances[-1][
+            last_sample[
                 "distance_m"
             ]
         )
@@ -2131,21 +2202,31 @@ def build_place_trends(
         first_entered_at = None
         first_left_at = None
 
-        previous_inside = (
-            start_inside
-        )
+        # 只追踪“明确 inside / outside”
+        # uncertain 样本不触发状态翻转
+        previous_certain_state = None
 
-        for sample in distances[1:]:
-            current_sample_inside = (
+        for sample in distances:
+            state = (
                 sample[
-                    "distance_m"
+                    "boundary_state"
                 ]
-                <= radius_m
             )
 
+            if state == "uncertain":
+                continue
+
+            if previous_certain_state is None:
+                previous_certain_state = (
+                    state
+                )
+                continue
+
             if (
-                not previous_inside
-                and current_sample_inside
+                previous_certain_state
+                == "outside"
+                and state
+                == "inside"
             ):
                 entered = True
 
@@ -2160,8 +2241,10 @@ def build_place_trends(
                     )
 
             elif (
-                previous_inside
-                and not current_sample_inside
+                previous_certain_state
+                == "inside"
+                and state
+                == "outside"
             ):
                 left = True
 
@@ -2175,8 +2258,8 @@ def build_place_trends(
                         )
                     )
 
-            previous_inside = (
-                current_sample_inside
+            previous_certain_state = (
+                state
             )
 
         distance_change = (
@@ -2184,27 +2267,92 @@ def build_place_trends(
             - start_distance
         )
 
+        start_accuracy = (
+            first_sample.get(
+                "accuracy_m"
+            )
+        )
+
+        end_accuracy = (
+            last_sample.get(
+                "accuracy_m"
+            )
+        )
+
+        uncertainty_values = [
+            value
+            for value in (
+                start_accuracy,
+                end_accuracy
+            )
+            if isinstance(
+                value,
+                (int, float)
+            )
+        ]
+
+        if uncertainty_values:
+            trend_uncertainty = (
+                sum(
+                    uncertainty_values
+                )
+                / len(
+                    uncertainty_values
+                )
+            )
+
+        else:
+            trend_uncertainty = 30.0
+
+        trend_uncertainty = max(
+            30.0,
+            min(
+                trend_uncertainty,
+                100.0
+            )
+        )
+
+        # 距离变化阈值必须同时超过：
+        # 100m 基础阈值
+        # GPS 误差的 1.5 倍
+        meaningful_change = max(
+            100.0,
+            trend_uncertainty * 1.5
+        )
+
+        current_boundary_state = (
+            last_sample[
+                "boundary_state"
+            ]
+        )
+
         if (
             entered
-            and current_inside
+            and current_boundary_state
+            == "inside"
         ):
             trend = "entered"
 
         elif (
             left
-            and not current_inside
+            and current_boundary_state
+            == "outside"
         ):
             trend = "left"
 
         elif (
-            not current_inside
-            and distance_change <= -100
+            current_boundary_state
+            == "outside"
+            and distance_change
+            <= -meaningful_change
         ):
             trend = "approaching"
 
         elif (
-            not current_inside
-            and distance_change >= 100
+            current_boundary_state
+            == "outside"
+            and distance_change
+            >= meaningful_change
         ):
             trend = "moving_away"
 
@@ -2227,9 +2375,7 @@ def build_place_trends(
                 )
             ),
 
-            "trend": (
-                trend
-            ),
+            "trend": trend,
 
             "start_inside": (
                 start_inside
@@ -2237,6 +2383,10 @@ def build_place_trends(
 
             "current_inside": (
                 current_inside
+            ),
+
+            "current_boundary_state": (
+                current_boundary_state
             ),
 
             "entered_during_window": (
@@ -2282,6 +2432,13 @@ def build_place_trends(
             "distance_change_m": (
                 round(
                     distance_change,
+                    1
+                )
+            ),
+
+            "trend_uncertainty_m": (
+                round(
+                    trend_uncertainty,
                     1
                 )
             )
@@ -2337,9 +2494,7 @@ def build_spatial_context(
             ),
 
             "provider": {
-                "name": (
-                    "amap"
-                ),
+                "name": "amap",
 
                 "available": (
                     bool(
@@ -2408,13 +2563,8 @@ def build_spatial_context(
                 "wgs84"
             ),
 
-            "latitude": (
-                latitude
-            ),
-
-            "longitude": (
-                longitude
-            ),
+            "latitude": latitude,
+            "longitude": longitude,
 
             "accuracy_m": (
                 current.get(
@@ -2439,9 +2589,7 @@ def build_spatial_context(
             )
         },
 
-        "movement": (
-            movement
-        ),
+        "movement": movement,
 
         "personal_places": {
             "count": (
@@ -2608,6 +2756,110 @@ def build_spatial_context(
         ] = description
 
     return spatial
+
+
+# =========================
+# Route 输出统一
+# =========================
+
+def attach_route_summary(
+    route_result
+):
+    if not isinstance(
+        route_result,
+        dict
+    ):
+        return route_result
+
+    paths = (
+        route_result.get(
+            "paths"
+        )
+    )
+
+    first_path = None
+
+    if (
+        isinstance(
+            paths,
+            list
+        )
+        and paths
+        and isinstance(
+            paths[0],
+            dict
+        )
+    ):
+        first_path = (
+            paths[0]
+        )
+
+    summary = {
+        "available": (
+            route_result.get(
+                "available"
+            )
+        ),
+
+        "mode": (
+            route_result.get(
+                "mode"
+            )
+        ),
+
+        "destination_type": (
+            route_result.get(
+                "destination_type"
+            )
+        ),
+
+        "destination_name": (
+            route_result.get(
+                "destination_name"
+            )
+        ),
+
+        "destination_kind": (
+            route_result.get(
+                "destination_kind"
+            )
+        ),
+
+        "straight_line_distance_m": (
+            route_result.get(
+                "straight_line_distance_m"
+            )
+        ),
+
+        "route_distance_m": None,
+        "duration_seconds": None,
+        "duration_minutes": None
+    }
+
+    if first_path:
+        summary[
+            "route_distance_m"
+        ] = first_path.get(
+            "distance_m"
+        )
+
+        summary[
+            "duration_seconds"
+        ] = first_path.get(
+            "duration_seconds"
+        )
+
+        summary[
+            "duration_minutes"
+        ] = first_path.get(
+            "duration_minutes"
+        )
+
+    route_result[
+        "route_summary"
+    ] = summary
+
+    return route_result
 
 
 # =========================
@@ -3836,9 +4088,7 @@ def reality_spatial():
             utc_now_iso()
         ),
 
-        "spatial": (
-            spatial
-        )
+        "spatial": spatial
     })
 
 
@@ -3933,17 +4183,13 @@ def reality_spatial_history():
             )
         ),
 
-        "movement": (
-            movement
-        ),
+        "movement": movement,
 
         "personal_place_trends": (
             place_trends
         ),
 
-        "history": (
-            history
-        )
+        "history": history
     })
 
 
@@ -4013,13 +4259,8 @@ def reality_spatial_places():
                 )
             ),
 
-            "places": (
-                places
-            ),
-
-            "relations": (
-                relations
-            )
+            "places": places,
+            "relations": relations
         })
 
     data = request.get_json(
@@ -4443,28 +4684,14 @@ def reality_spatial_place_from_poi():
     return jsonify({
         "status": "ok",
 
-        "place": (
-            place
-        ),
+        "place": place,
 
         "source_poi": {
             "id": poi_id,
-
-            "name": (
-                poi_name
-            ),
-
-            "type": (
-                poi_type
-            ),
-
-            "address": (
-                poi_address
-            ),
-
-            "location": (
-                poi_location
-            ),
+            "name": poi_name,
+            "type": poi_type,
+            "address": poi_address,
+            "location": poi_location,
 
             "coordinate_system": (
                 "gcj02"
@@ -4505,9 +4732,7 @@ def reality_spatial_place(
                     "personal_place_not_found"
                 ),
 
-                "name": (
-                    name
-                )
+                "name": name
             }), 404
 
         sensors = (
@@ -4573,17 +4798,9 @@ def reality_spatial_place(
                 utc_now_iso()
             ),
 
-            "place": (
-                place
-            ),
-
-            "relation": (
-                relation
-            ),
-
-            "trend": (
-                trend
-            )
+            "place": place,
+            "relation": relation,
+            "trend": trend
         })
 
     conn = get_db()
@@ -4614,9 +4831,7 @@ def reality_spatial_place(
             deleted > 0
         ),
 
-        "name": (
-            name
-        )
+        "name": name
     })
 
 
@@ -4679,10 +4894,7 @@ def reality_spatial_nearby():
     ):
         return jsonify({
             "status": "ok",
-
-            "nearby": (
-                converted
-            )
+            "nearby": converted
         })
 
     keywords = (
@@ -4731,24 +4943,18 @@ def reality_spatial_nearby():
             utc_now_iso()
         ),
 
-        "nearby": (
-            nearby
-        )
+        "nearby": nearby
     })
 
 
 # =========================
 # Route
 #
-# 支持三种 destination：
+# destination 支持：
 #
 # 1. ?place=家
-#
 # 2. ?latitude=...&longitude=...
-#    WGS84
-#
 # 3. ?poi_location=116.xxx,29.xxx
-#    Amap GCJ-02
 # =========================
 
 @app.route(
@@ -4856,10 +5062,7 @@ def reality_spatial_route():
         ):
             return jsonify({
                 "status": "ok",
-
-                "route": (
-                    origin_gcj
-                )
+                "route": origin_gcj
             })
 
         route_result = (
@@ -4922,9 +5125,7 @@ def reality_spatial_route():
 
         route_result[
             "destination_name"
-        ] = (
-            poi_name
-        )
+        ] = poi_name
 
         route_result[
             "straight_line_distance_m"
@@ -4938,6 +5139,12 @@ def reality_spatial_route():
             else None
         )
 
+        route_result = (
+            attach_route_summary(
+                route_result
+            )
+        )
+
         return jsonify({
             "status": "ok",
 
@@ -4945,9 +5152,7 @@ def reality_spatial_route():
                 utc_now_iso()
             ),
 
-            "route": (
-                route_result
-            )
+            "route": route_result
         })
 
     # =========================
@@ -5048,6 +5253,12 @@ def reality_spatial_route():
             else None
         )
 
+        route_result = (
+            attach_route_summary(
+                route_result
+            )
+        )
+
         return jsonify({
             "status": "ok",
 
@@ -5055,9 +5266,7 @@ def reality_spatial_route():
                 utc_now_iso()
             ),
 
-            "route": (
-                route_result
-            )
+            "route": route_result
         })
 
     # =========================
@@ -5148,6 +5357,12 @@ def reality_spatial_route():
         else None
     )
 
+    route_result = (
+        attach_route_summary(
+            route_result
+        )
+    )
+
     return jsonify({
         "status": "ok",
 
@@ -5155,9 +5370,7 @@ def reality_spatial_route():
             utc_now_iso()
         ),
 
-        "route": (
-            route_result
-        )
+        "route": route_result
     })
 
 
@@ -5214,9 +5427,7 @@ def reality_status():
         sensor_status[
             sensor_name
         ] = {
-            "freshness": (
-                freshness
-            ),
+            "freshness": freshness,
 
             "age_seconds": (
                 age_seconds
