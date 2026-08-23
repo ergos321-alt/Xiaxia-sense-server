@@ -6,7 +6,9 @@ def build_reality_context(
     """
     Build a compact, stable reality layer for Xiaxia.
 
-    Direct facts:
+    Structure:
+
+    Direct interpreted facts:
     - user_state
     - device
     - environment
@@ -16,13 +18,16 @@ def build_reality_context(
     - spatial
 
     summary:
-    deterministic human-readable descriptions
+    - deterministic descriptions
+    - stable human-readable reality summaries
 
     inferences:
-    conservative contextual guesses only
+    - conservative contextual guesses
+    - explicit confidence
+    - no inference about emotion, intention, desire or need
 
-    This layer does not infer the user's emotion,
-    intention, desire, or need.
+    Reality describes the world.
+    Xiaxia decides how to respond to it.
     """
 
     reality = {
@@ -49,8 +54,10 @@ def build_reality_context(
         activity,
         dict
     ):
-        state = activity.get(
-            "state"
+        state = (
+            activity.get(
+                "state"
+            )
         )
 
         if state is not None:
@@ -68,8 +75,10 @@ def build_reality_context(
         pedometer,
         dict
     ):
-        steps = pedometer.get(
-            "steps"
+        steps = (
+            pedometer.get(
+                "steps"
+            )
         )
 
         if steps is not None:
@@ -99,16 +108,19 @@ def build_reality_context(
                     "level_percent"
                 )
             ),
+
             "battery_state": (
                 battery.get(
                     "state"
                 )
             ),
+
             "charging": (
                 battery.get(
                     "charging"
                 )
             ),
+
             "low_power_mode": (
                 battery.get(
                     "low_power_mode"
@@ -138,6 +150,7 @@ def build_reality_context(
                     "state"
                 )
             ),
+
             "lux": (
                 light.get(
                     "lux"
@@ -163,6 +176,7 @@ def build_reality_context(
                     "relative_sound_level"
                 )
             ),
+
             "dbfs": (
                 microphone.get(
                     "dbfs"
@@ -188,6 +202,7 @@ def build_reality_context(
                     "pressure_hpa"
                 )
             ),
+
             "relative_altitude_m": (
                 barometer.get(
                     "relative_altitude_m"
@@ -215,21 +230,25 @@ def build_reality_context(
                     "state"
                 )
             ),
+
             "type": (
                 network.get(
                     "type"
                 )
             ),
+
             "quality": (
                 network.get(
                     "quality"
                 )
             ),
+
             "strength": (
                 network.get(
                     "strength"
                 )
             ),
+
             "ssid": (
                 network.get(
                     "ssid"
@@ -238,7 +257,7 @@ def build_reality_context(
         }
 
     # =========================
-    # 位置
+    # 原始位置事实
     # =========================
 
     location = semantic.get(
@@ -257,21 +276,25 @@ def build_reality_context(
                     "available"
                 )
             ),
+
             "latitude": (
                 location.get(
                     "latitude"
                 )
             ),
+
             "longitude": (
                 location.get(
                     "longitude"
                 )
             ),
+
             "accuracy_m": (
                 location.get(
                     "accuracy_m"
                 )
             ),
+
             "speed_m_s": (
                 location.get(
                     "speed_m_s"
@@ -296,56 +319,67 @@ def build_reality_context(
             "weather"
         ] = {
             "available": True,
+
             "condition": (
                 weather.get(
                     "condition"
                 )
             ),
+
             "temperature_c": (
                 weather.get(
                     "temperature_c"
                 )
             ),
+
             "feels_like_c": (
                 weather.get(
                     "apparent_temperature_c"
                 )
             ),
+
             "humidity_percent": (
                 weather.get(
                     "humidity_percent"
                 )
             ),
+
             "precipitation_mm": (
                 weather.get(
                     "precipitation_mm"
                 )
             ),
+
             "cloud_cover_percent": (
                 weather.get(
                     "cloud_cover_percent"
                 )
             ),
+
             "wind_speed_kmh": (
                 weather.get(
                     "wind_speed_kmh"
                 )
             ),
+
             "wind_direction_deg": (
                 weather.get(
                     "wind_direction_deg"
                 )
             ),
+
             "pressure_hpa": (
                 weather.get(
                     "surface_pressure_hpa"
                 )
             ),
+
             "timezone": (
                 weather.get(
                     "timezone"
                 )
             ),
+
             "observed_at": (
                 weather.get(
                     "time"
@@ -374,7 +408,11 @@ def build_reality_context(
         ] = spatial
 
     # =========================
-    # 高层摘要：移动状态
+    # 基础移动状态
+    #
+    # 这一层只翻译 Activity。
+    # 后面会用 Spatial movement
+    # 做融合后的最终移动摘要。
     # =========================
 
     activity_state = (
@@ -389,34 +427,190 @@ def build_reality_context(
         "stationary": (
             "not_moving"
         ),
+
         "walking": (
             "moving_on_foot"
         ),
+
         "running": (
             "moving_on_foot_fast"
         ),
+
         "cycling": (
             "cycling"
         ),
+
         "in_vehicle": (
             "in_vehicle"
         )
     }
 
-    if (
-        activity_state
-        in mobility_map
+    activity_mobility = (
+        mobility_map.get(
+            activity_state
+        )
+    )
+
+    if activity_mobility:
+        reality[
+            "summary"
+        ][
+            "activity_mobility"
+        ] = activity_mobility
+
+    # =========================
+    # Spatial 移动融合
+    # =========================
+
+    spatial_data = reality.get(
+        "spatial",
+        {}
+    )
+
+    spatial_movement = {}
+
+    if isinstance(
+        spatial_data,
+        dict
     ):
+        possible_movement = (
+            spatial_data.get(
+                "movement"
+            )
+        )
+
+        if isinstance(
+            possible_movement,
+            dict
+        ):
+            spatial_movement = (
+                possible_movement
+            )
+
+    spatial_trend = (
+        spatial_movement.get(
+            "trend"
+        )
+    )
+
+    spatial_confidence = (
+        spatial_movement.get(
+            "confidence"
+        )
+    )
+
+    # =========================
+    # 最终 Mobility
+    #
+    # 优先级：
+    #
+    # 1. Spatial 高/中置信融合结果
+    # 2. Activity
+    # 3. uncertain
+    #
+    # Spatial 已经融合了 GPS accuracy
+    # 和 Activity，因此它更适合作为最终结论。
+    # =========================
+
+    final_mobility = None
+    final_mobility_confidence = None
+
+    if (
+        spatial_trend == "stable"
+        and spatial_confidence
+        in (
+            "high",
+            "medium"
+        )
+    ):
+        final_mobility = (
+            "not_moving"
+        )
+
+        final_mobility_confidence = (
+            spatial_confidence
+        )
+
+    elif (
+        spatial_trend == "moving"
+        and spatial_confidence
+        in (
+            "high",
+            "medium"
+        )
+    ):
+        if activity_state == "walking":
+            final_mobility = (
+                "moving_on_foot"
+            )
+
+        elif activity_state == "running":
+            final_mobility = (
+                "moving_on_foot_fast"
+            )
+
+        elif activity_state == "cycling":
+            final_mobility = (
+                "cycling"
+            )
+
+        elif activity_state == "in_vehicle":
+            final_mobility = (
+                "in_vehicle"
+            )
+
+        else:
+            final_mobility = (
+                "moving"
+            )
+
+        final_mobility_confidence = (
+            spatial_confidence
+        )
+
+    elif (
+        spatial_trend
+        in (
+            "uncertain",
+            "insufficient_history"
+        )
+    ):
+        if activity_mobility:
+            final_mobility = (
+                activity_mobility
+            )
+
+            final_mobility_confidence = (
+                "medium"
+                if spatial_trend
+                == "insufficient_history"
+                else "low"
+            )
+
+    elif activity_mobility:
+        final_mobility = (
+            activity_mobility
+        )
+
+        final_mobility_confidence = (
+            "medium"
+        )
+
+    if final_mobility:
         reality[
             "summary"
         ][
             "mobility"
-        ] = mobility_map[
-            activity_state
-        ]
+        ] = final_mobility
+
+        reality[
+            "summary"
+        ][
+            "mobility_confidence"
+        ] = final_mobility_confidence
 
     # =========================
-    # 高层摘要：天气体感
+    # 天气体感
     # =========================
 
     weather_data = reality.get(
@@ -486,7 +680,7 @@ def build_reality_context(
             ] = thermal_state
 
     # =========================
-    # 高层摘要：降水
+    # 降水
     # =========================
 
     if (
@@ -575,7 +769,7 @@ def build_reality_context(
             ] = "none"
 
     # =========================
-    # 高层摘要：设备电量
+    # 设备电量
     # =========================
 
     device = reality.get(
@@ -589,8 +783,10 @@ def build_reality_context(
         )
     )
 
-    charging = device.get(
-        "charging"
+    charging = (
+        device.get(
+            "charging"
+        )
     )
 
     if isinstance(
@@ -629,7 +825,7 @@ def build_reality_context(
         ] = power_state
 
     # =========================
-    # 高层摘要：网络
+    # 网络
     # =========================
 
     network_data = reality.get(
@@ -684,7 +880,7 @@ def build_reality_context(
         ] = connectivity_value
 
     # =========================
-    # 高层摘要：周围光线
+    # 光线
     # =========================
 
     environment = reality.get(
@@ -692,9 +888,11 @@ def build_reality_context(
         {}
     )
 
-    light_data = environment.get(
-        "light",
-        {}
+    light_data = (
+        environment.get(
+            "light",
+            {}
+        )
     )
 
     if isinstance(
@@ -715,12 +913,14 @@ def build_reality_context(
             ] = light_state
 
     # =========================
-    # 高层摘要：周围声音
+    # 声音
     # =========================
 
-    sound_data = environment.get(
-        "sound",
-        {}
+    sound_data = (
+        environment.get(
+            "sound",
+            {}
+        )
     )
 
     if isinstance(
@@ -741,29 +941,72 @@ def build_reality_context(
             ] = sound_state
 
     # =========================
-    # 高层摘要：Spatial
+    # Spatial 场景
     # =========================
 
-    spatial_data = reality.get(
-        "spatial",
-        {}
+    scene_data = (
+        spatial_data.get(
+            "scene"
+        )
+        if isinstance(
+            spatial_data,
+            dict
+        )
+        else None
     )
+
+    if isinstance(
+        scene_data,
+        dict
+    ):
+        primary_scene = (
+            scene_data.get(
+                "primary_scene"
+            )
+        )
+
+        secondary_scenes = (
+            scene_data.get(
+                "secondary_scenes",
+                []
+            )
+        )
+
+        scene_confidence = (
+            scene_data.get(
+                "confidence"
+            )
+        )
+
+        if primary_scene:
+            reality[
+                "summary"
+            ][
+                "spatial_scene"
+            ] = primary_scene
+
+        if secondary_scenes:
+            reality[
+                "summary"
+            ][
+                "spatial_secondary_scenes"
+            ] = secondary_scenes
+
+        if scene_confidence:
+            reality[
+                "summary"
+            ][
+                "spatial_scene_confidence"
+            ] = scene_confidence
+
+    # =========================
+    # Spatial 描述
+    # =========================
 
     if isinstance(
         spatial_data,
         dict
     ):
-        scene = spatial_data.get(
-            "scene"
-        )
-
-        if scene:
-            reality[
-                "summary"
-            ][
-                "spatial_scene"
-            ] = scene
-
         spatial_description = (
             spatial_data.get(
                 "description"
@@ -777,69 +1020,175 @@ def build_reality_context(
                 "spatial_description"
             ] = spatial_description
 
-        movement = (
-            spatial_data.get(
-                "movement",
-                {}
-            )
-        )
+    # =========================
+    # Spatial movement 摘要
+    # =========================
 
-        if isinstance(
-            movement,
-            dict
-        ):
-            movement_trend = (
-                movement.get(
+    if spatial_movement:
+        spatial_movement_summary = {
+            "trend": (
+                spatial_movement.get(
                     "trend"
                 )
+            ),
+
+            "confidence": (
+                spatial_movement.get(
+                    "confidence"
+                )
+            ),
+
+            "location_quality": (
+                spatial_movement.get(
+                    "location_quality"
+                )
+            ),
+
+            "filtered_path_distance_m": (
+                spatial_movement.get(
+                    "filtered_path_distance_m"
+                )
+            ),
+
+            "effective_net_displacement_m": (
+                spatial_movement.get(
+                    "effective_net_displacement_m"
+                )
+            ),
+
+            "direction": (
+                spatial_movement.get(
+                    "direction"
+                )
             )
+        }
 
-            if movement_trend:
-                reality[
-                    "summary"
-                ][
-                    "spatial_movement"
-                ] = movement_trend
+        reality[
+            "summary"
+        ][
+            "spatial_movement"
+        ] = {
+            key: value
+            for (
+                key,
+                value
+            ) in spatial_movement_summary.items()
+            if value is not None
+        }
 
+    # =========================
+    # 最近个人地点
+    # =========================
+
+    nearest_place = None
+
+    if isinstance(
+        spatial_data,
+        dict
+    ):
         nearest_place = (
             spatial_data.get(
                 "nearest_personal_place"
             )
         )
 
-        if isinstance(
-            nearest_place,
-            dict
-        ):
-            reality[
-                "summary"
-            ][
-                "nearest_personal_place"
-            ] = {
-                "name": (
-                    nearest_place.get(
-                        "name"
-                    )
-                ),
-                "kind": (
-                    nearest_place.get(
-                        "kind"
-                    )
-                ),
-                "distance_m": (
-                    nearest_place.get(
-                        "distance_m"
-                    )
-                ),
-                "inside": (
-                    nearest_place.get(
-                        "inside"
-                    )
+    if isinstance(
+        nearest_place,
+        dict
+    ):
+        nearest_place_summary = {
+            "name": (
+                nearest_place.get(
+                    "name"
                 )
-            }
+            ),
+
+            "kind": (
+                nearest_place.get(
+                    "kind"
+                )
+            ),
+
+            "distance_m": (
+                nearest_place.get(
+                    "distance_m"
+                )
+            ),
+
+            "inside": (
+                nearest_place.get(
+                    "inside"
+                )
+            )
+        }
+
+        reality[
+            "summary"
+        ][
+            "nearest_personal_place"
+        ] = {
+            key: value
+            for (
+                key,
+                value
+            ) in nearest_place_summary.items()
+            if value is not None
+        }
 
     # =========================
-    # 人类可理解描述
+    # 个人地点趋势
+    # =========================
+
+    if isinstance(
+        spatial_data,
+        dict
+    ):
+        place_trends = (
+            spatial_data.get(
+                "personal_place_trends"
+            )
+        )
+
+        if isinstance(
+            place_trends,
+            list
+        ):
+            meaningful_trends = []
+
+            for item in place_trends:
+                if not isinstance(
+                    item,
+                    dict
+                ):
+                    continue
+
+                trend = (
+                    item.get(
+                        "trend"
+                    )
+                )
+
+                if trend not in (
+                    "approaching",
+                    "moving_away"
+                ):
+                    continue
+
+                meaningful_trends.append(
+                    item
+                )
+
+            if meaningful_trends:
+                reality[
+                    "summary"
+                ][
+                    "personal_place_trends"
+                ] = meaningful_trends[
+                    :5
+                ]
+
+    # =========================
+    # 人类可理解的现实描述
     # =========================
 
     descriptions = []
@@ -860,24 +1209,31 @@ def build_reality_context(
         "extremely_hot": (
             "体感非常炎热"
         ),
+
         "very_hot": (
             "体感很热"
         ),
+
         "hot": (
             "体感偏热"
         ),
+
         "warm": (
             "体感温暖"
         ),
+
         "comfortable": (
             "体感比较舒适"
         ),
+
         "cool": (
             "体感偏凉"
         ),
+
         "cold": (
             "体感寒冷"
         ),
+
         "very_cold": (
             "体感非常寒冷"
         )
@@ -905,12 +1261,15 @@ def build_reality_context(
         "light_rain": (
             "正在下小雨"
         ),
+
         "rain": (
             "正在下雨"
         ),
+
         "heavy_rain": (
             "正在下较大的雨"
         ),
+
         "none": (
             "目前没有降水"
         )
@@ -926,8 +1285,10 @@ def build_reality_context(
             ]
         )
 
-    humidity = weather_data.get(
-        "humidity_percent"
+    humidity = (
+        weather_data.get(
+            "humidity_percent"
+        )
     )
 
     if isinstance(
@@ -949,8 +1310,10 @@ def build_reality_context(
                 "空气比较干燥"
             )
 
-    wind_speed = weather_data.get(
-        "wind_speed_kmh"
+    wind_speed = (
+        weather_data.get(
+            "wind_speed_kmh"
+        )
     )
 
     if isinstance(
@@ -1008,15 +1371,19 @@ def build_reality_context(
         "dark": (
             "周围很暗"
         ),
+
         "dim": (
             "周围光线较暗"
         ),
+
         "normal": (
             "周围光线正常"
         ),
+
         "bright": (
             "周围比较明亮"
         ),
+
         "very_bright": (
             "周围光线很强"
         )
@@ -1044,15 +1411,19 @@ def build_reality_context(
         "very_quiet": (
             "环境非常安静"
         ),
+
         "quiet": (
             "环境比较安静"
         ),
+
         "moderate": (
             "周围有一些环境声音"
         ),
+
         "loud": (
             "周围比较吵"
         ),
+
         "very_loud": (
             "周围非常吵"
         )
@@ -1088,7 +1459,7 @@ def build_reality_context(
             )
         )
 
-    # ---------- 移动状态 ----------
+    # ---------- 融合后的移动描述 ----------
 
     mobility = (
         reality[
@@ -1098,19 +1469,35 @@ def build_reality_context(
         )
     )
 
+    mobility_confidence = (
+        reality[
+            "summary"
+        ].get(
+            "mobility_confidence"
+        )
+    )
+
     mobility_description_map = {
         "not_moving": (
-            "手机目前没有明显移动"
+            "手机目前没有可靠证据显示正在移动"
         ),
+
+        "moving": (
+            "手机当前存在可靠的空间移动"
+        ),
+
         "moving_on_foot": (
             "手机正在随步行移动"
         ),
+
         "moving_on_foot_fast": (
-            "手机正在快速移动，可能伴随跑动"
+            "手机正在随快速步行或跑动移动"
         ),
+
         "cycling": (
             "手机正在随骑行移动"
         ),
+
         "in_vehicle": (
             "手机正在随交通工具移动"
         )
@@ -1155,12 +1542,15 @@ def build_reality_context(
         "charging": (
             "手机正在充电"
         ),
+
         "critical": (
             "手机电量已经非常低"
         ),
+
         "low": (
             "手机电量较低"
         ),
+
         "high": (
             "手机电量充足"
         )
@@ -1220,15 +1610,19 @@ def build_reality_context(
         "offline": (
             "手机当前没有网络连接"
         ),
+
         "online_weak": (
             "手机已联网，但网络信号较弱"
         ),
+
         "online_normal": (
             "手机网络连接正常"
         ),
+
         "online_strong": (
             "手机网络连接良好"
         ),
+
         "online": (
             "手机当前已联网"
         )
@@ -1294,14 +1688,6 @@ def build_reality_context(
 
     inference_contexts = []
 
-    mobility = (
-        reality[
-            "summary"
-        ].get(
-            "mobility"
-        )
-    )
-
     ambient_light = (
         reality[
             "summary"
@@ -1334,9 +1720,7 @@ def build_reality_context(
         )
     )
 
-    # 静止 + 暗 + 安静
-    # 只判断可能是休息环境
-    # 不判断用户正在睡觉
+    # ---------- 可能的休息环境 ----------
 
     if (
         mobility == "not_moving"
@@ -1353,15 +1737,19 @@ def build_reality_context(
             "value": (
                 "resting_environment"
             ),
+
             "confidence": (
                 "medium"
             ),
+
             "basis": [
                 "not_moving",
                 ambient_light,
                 ambient_sound
             ]
         })
+
+    # ---------- 可能的移动环境 ----------
 
     location_data = reality.get(
         "location",
@@ -1370,6 +1758,7 @@ def build_reality_context(
 
     if (
         mobility in (
+            "moving",
             "moving_on_foot",
             "moving_on_foot_fast",
             "cycling",
@@ -1383,14 +1772,24 @@ def build_reality_context(
             "value": (
                 "moving_environment"
             ),
+
             "confidence": (
-                "medium"
+                mobility_confidence
+                if mobility_confidence
+                in (
+                    "high",
+                    "medium"
+                )
+                else "medium"
             ),
+
             "basis": [
                 mobility,
                 "location_available"
             ]
         })
+
+    # ---------- 炎热环境 ----------
 
     if thermal_feel in (
         "very_hot",
@@ -1400,13 +1799,17 @@ def build_reality_context(
             "value": (
                 "hot_environment"
             ),
+
             "confidence": (
                 "high"
             ),
+
             "basis": [
                 thermal_feel
             ]
         })
+
+    # ---------- 雨天环境 ----------
 
     if precipitation in (
         "light_rain",
@@ -1417,11 +1820,57 @@ def build_reality_context(
             "value": (
                 "rainy_environment"
             ),
+
             "confidence": (
                 "high"
             ),
+
             "basis": [
                 precipitation
+            ]
+        })
+
+    # ---------- 空间环境 ----------
+    #
+    # 这是对 POI 分布的空间描述，
+    # 不是对用户行为的推断。
+    # ----------
+
+    primary_scene = (
+        reality[
+            "summary"
+        ].get(
+            "spatial_scene"
+        )
+    )
+
+    scene_confidence = (
+        reality[
+            "summary"
+        ].get(
+            "spatial_scene_confidence"
+        )
+    )
+
+    if (
+        primary_scene
+        and scene_confidence
+        in (
+            "high",
+            "medium"
+        )
+    ):
+        inference_contexts.append({
+            "value": (
+                f"{primary_scene}_environment"
+            ),
+
+            "confidence": (
+                scene_confidence
+            ),
+
+            "basis": [
+                "nearby_poi_distribution"
             ]
         })
 
@@ -1449,6 +1898,11 @@ def build_reality_context(
         if accuracy <= 25:
             location_quality = (
                 "good"
+            )
+
+        elif accuracy <= 60:
+            location_quality = (
+                "usable"
             )
 
         elif accuracy <= 100:
