@@ -6515,6 +6515,59 @@ def phone_timeline_check():
 
 
 # =========================
+# Xiaxia Hand V1 temporary diagnostics
+# =========================
+
+@app.route(
+    "/debug/hand-routes",
+    methods=["GET"]
+)
+def debug_hand_routes():
+    """
+    Temporary deployment diagnostic endpoint.
+
+    Exposes only registered /hand routes and their HTTP methods.
+    It intentionally does not expose environment variables, credentials,
+    database state, or other application routes. Remove after diagnosis.
+    """
+
+    routes = []
+
+    for rule in app.url_map.iter_rules():
+        path = str(rule)
+
+        if not path.startswith("/hand"):
+            continue
+
+        methods = sorted(
+            method
+            for method in rule.methods
+            if method not in {
+                "HEAD",
+                "OPTIONS"
+            }
+        )
+
+        routes.append({
+            "path": path,
+            "methods": methods
+        })
+
+    routes.sort(
+        key=lambda item: (
+            item["path"],
+            item["methods"]
+        )
+    )
+
+    return jsonify({
+        "status": "ok",
+        "hand_route_count": len(routes),
+        "routes": routes
+    })
+
+
+# =========================
 # 本地运行
 # =========================
 
