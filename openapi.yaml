@@ -1,0 +1,768 @@
+openapi: 3.1.0
+info:
+  title: Xiaxia Reality and Hand API
+  version: 1.1.0
+  description: >-
+    Read Xiaxia Reality, Phone and Spatial context, manage personal places,
+    and create strictly whitelisted Xiaxia Hand commands. Add the real HTTPS
+    Render base URL under the top-level servers field before importing this
+    schema into Custom GPT Actions.
+
+security:
+  - bearerAuth: []
+
+paths:
+  /ping:
+    get:
+      operationId: getSenseHealth
+      summary: Check Reality Server health
+      security: []
+      responses:
+        "200":
+          $ref: "#/components/responses/JsonResponse"
+
+  /context:
+    get:
+      operationId: getFullSenseContext
+      summary: Read the complete sensor and interpreted context
+      responses:
+        "200":
+          $ref: "#/components/responses/JsonResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /reality/context:
+    get:
+      operationId: getRealityContext
+      summary: Read the complete Reality context
+      responses:
+        "200":
+          $ref: "#/components/responses/JsonResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /reality/summary:
+    get:
+      operationId: getRealitySummary
+      summary: Read compact Reality summaries and inferences
+      responses:
+        "200":
+          $ref: "#/components/responses/JsonResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /reality/environment:
+    get:
+      operationId: getRealityEnvironment
+      summary: Read environment and weather reality
+      responses:
+        "200":
+          $ref: "#/components/responses/JsonResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /reality/device:
+    get:
+      operationId: getRealityDevice
+      summary: Read device power and network reality
+      responses:
+        "200":
+          $ref: "#/components/responses/JsonResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /reality/location:
+    get:
+      operationId: getRealityLocation
+      summary: Read location and mobility reality
+      responses:
+        "200":
+          $ref: "#/components/responses/JsonResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /reality/phone:
+    get:
+      operationId: getPhoneActivity
+      summary: Read current Phone Activity
+      responses:
+        "200":
+          $ref: "#/components/responses/JsonResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /reality/phone/timeline:
+    get:
+      operationId: getPhoneTimeline
+      summary: Read the recent Phone Activity timeline
+      parameters:
+        - name: minutes
+          in: query
+          description: Lookback window in minutes.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 2880
+            default: 60
+        - name: limit
+          in: query
+          description: Maximum number of timeline events.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 200
+      responses:
+        "200":
+          $ref: "#/components/responses/JsonResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /reality/phone/history:
+    get:
+      operationId: getPhoneHistory
+      summary: Read summarized short-term Phone Activity history
+      parameters:
+        - name: minutes
+          in: query
+          description: Relative lookback, or the window before end.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 2880
+            default: 60
+        - name: start
+          in: query
+          description: Optional ISO 8601 start datetime.
+          schema:
+            type: string
+            format: date-time
+        - name: end
+          in: query
+          description: Optional ISO 8601 end datetime.
+          schema:
+            type: string
+            format: date-time
+        - name: types
+          in: query
+          description: History categories, or all.
+          schema:
+            type: string
+            default: all
+        - name: include_timeline
+          in: query
+          description: Include filtered raw timeline events.
+          schema:
+            type: boolean
+            default: false
+        - name: timeline_limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 200
+      responses:
+        "200":
+          $ref: "#/components/responses/JsonResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /reality/spatial:
+    get:
+      operationId: getSpatialReality
+      summary: Read current Spatial Reality
+      responses:
+        "200":
+          $ref: "#/components/responses/JsonResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /reality/spatial/history:
+    get:
+      operationId: getSpatialHistory
+      summary: Read recent location history and movement analysis
+      parameters:
+        - name: minutes
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 2880
+            default: 30
+      responses:
+        "200":
+          $ref: "#/components/responses/JsonResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /reality/spatial/nearby:
+    get:
+      operationId: findNearbyPlaces
+      summary: Search nearby Amap POIs from the current location
+      parameters:
+        - name: keywords
+          in: query
+          schema:
+            type: string
+        - name: types
+          in: query
+          schema:
+            type: string
+        - name: radius
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1000
+      responses:
+        "200":
+          $ref: "#/components/responses/JsonResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /reality/spatial/route:
+    get:
+      operationId: getSpatialRoute
+      summary: Plan a route with the existing Spatial and Amap capability
+      description: >-
+        Use one destination form: a personal place name, an Amap POI location,
+        or WGS84 latitude and longitude.
+      parameters:
+        - name: mode
+          in: query
+          schema:
+            type: string
+            enum: [walking, driving, cycling, electrobike]
+            default: walking
+        - name: place
+          in: query
+          description: Saved personal place name.
+          schema:
+            type: string
+        - name: poi_location
+          in: query
+          description: Amap GCJ-02 longitude,latitude string.
+          schema:
+            type: string
+        - name: poi_name
+          in: query
+          schema:
+            type: string
+        - name: latitude
+          in: query
+          description: WGS84 destination latitude.
+          schema:
+            type: number
+            minimum: -90
+            maximum: 90
+        - name: longitude
+          in: query
+          description: WGS84 destination longitude.
+          schema:
+            type: number
+            minimum: -180
+            maximum: 180
+      responses:
+        "200":
+          $ref: "#/components/responses/JsonResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /reality/spatial/places:
+    get:
+      operationId: listPersonalPlaces
+      summary: List saved Personal Places and current relations
+      responses:
+        "200":
+          $ref: "#/components/responses/JsonResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+    post:
+      operationId: savePersonalPlace
+      summary: Save or update a Personal Place
+      x-openai-isConsequential: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PersonalPlaceRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/JsonResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "409":
+          $ref: "#/components/responses/ErrorResponse"
+
+  /reality/spatial/places/from-poi:
+    post:
+      operationId: savePersonalPlaceFromPoi
+      summary: Save a Personal Place from an Amap POI
+      x-openai-isConsequential: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PersonalPlaceFromPoiRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/JsonResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /reality/spatial/places/{name}:
+    parameters:
+      - name: name
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      operationId: getPersonalPlace
+      summary: Read one Personal Place
+      responses:
+        "200":
+          $ref: "#/components/responses/JsonResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+    delete:
+      operationId: deletePersonalPlace
+      summary: Delete one Personal Place
+      x-openai-isConsequential: true
+      responses:
+        "200":
+          $ref: "#/components/responses/JsonResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /reality/status:
+    get:
+      operationId: getRealityStatus
+      summary: Read sensor freshness and service status
+      responses:
+        "200":
+          $ref: "#/components/responses/JsonResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /hand/commands:
+    post:
+      operationId: createHandCommand
+      summary: Create one strictly whitelisted Android action command
+      description: >-
+        Creates a semantic command only. Tasker performs the Android action.
+        Never use this operation for an action outside the eight declared
+        request variants.
+      x-openai-isConsequential: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/HandCommandRequest"
+      responses:
+        "201":
+          description: Command created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HandCreateResponse"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /hand/commands/{command_id}:
+    get:
+      operationId: getHandCommandStatus
+      summary: Read the current status of a Hand command
+      parameters:
+        - name: command_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Current command state.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HandCommand"
+        "400":
+          $ref: "#/components/responses/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/ErrorResponse"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+
+  responses:
+    JsonResponse:
+      description: Successful JSON response.
+      content:
+        application/json:
+          schema:
+            type: object
+            additionalProperties: true
+    ErrorResponse:
+      description: Request error.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Unauthorized:
+      description: Missing or invalid Bearer token.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+        details:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+      required: [error]
+      additionalProperties: true
+
+    PersonalPlaceRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+        kind:
+          type: string
+          default: custom
+        latitude:
+          type: number
+          minimum: -90
+          maximum: 90
+        longitude:
+          type: number
+          minimum: -180
+          maximum: 180
+        radius_m:
+          type: number
+          exclusiveMinimum: 0
+          default: 150
+        note:
+          type: string
+        use_current_location:
+          type: boolean
+      required: [name]
+      additionalProperties: false
+
+    PersonalPlaceFromPoiRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        poi_name:
+          type: string
+        poi_location:
+          type: string
+          description: Amap GCJ-02 longitude,latitude.
+        poi_type:
+          type: string
+        poi_address:
+          type: string
+        poi_id:
+          type: string
+        kind:
+          type: string
+          default: custom
+        radius_m:
+          type: number
+          exclusiveMinimum: 0
+          default: 150
+        note:
+          type: string
+        poi:
+          type: object
+          properties:
+            id:
+              type: string
+            name:
+              type: string
+            type:
+              type: string
+            address:
+              type: string
+            location:
+              type: string
+          additionalProperties: false
+      additionalProperties: false
+
+    HandCommandRequest:
+      oneOf:
+        - $ref: "#/components/schemas/FlashlightCommandRequest"
+        - $ref: "#/components/schemas/VolumeCommandRequest"
+        - $ref: "#/components/schemas/OpenAppCommandRequest"
+        - $ref: "#/components/schemas/TimerCommandRequest"
+        - $ref: "#/components/schemas/AlarmCommandRequest"
+        - $ref: "#/components/schemas/DoNotDisturbCommandRequest"
+        - $ref: "#/components/schemas/BatterySaverCommandRequest"
+        - $ref: "#/components/schemas/NavigationCommandRequest"
+
+    FlashlightCommandRequest:
+      type: object
+      properties:
+        action:
+          type: string
+          const: flashlight
+        parameters:
+          type: object
+          properties:
+            state:
+              type: string
+              enum: [on, off]
+          required: [state]
+          additionalProperties: false
+      required: [action, parameters]
+      additionalProperties: false
+
+    VolumeCommandRequest:
+      type: object
+      properties:
+        action:
+          type: string
+          const: volume
+        parameters:
+          type: object
+          properties:
+            stream:
+              type: string
+              const: media
+            level:
+              type: integer
+              minimum: 0
+              maximum: 100
+          required: [stream, level]
+          additionalProperties: false
+      required: [action, parameters]
+      additionalProperties: false
+
+    OpenAppCommandRequest:
+      type: object
+      properties:
+        action:
+          type: string
+          const: open_app
+        parameters:
+          type: object
+          properties:
+            app:
+              type: string
+              minLength: 1
+              maxLength: 120
+              description: Semantic app name mapped to an Android package by Tasker.
+          required: [app]
+          additionalProperties: false
+      required: [action, parameters]
+      additionalProperties: false
+
+    TimerCommandRequest:
+      type: object
+      properties:
+        action:
+          type: string
+          const: timer
+        parameters:
+          type: object
+          properties:
+            duration_seconds:
+              type: integer
+              minimum: 1
+              maximum: 604800
+            label:
+              type: string
+              maxLength: 200
+          required: [duration_seconds]
+          additionalProperties: false
+      required: [action, parameters]
+      additionalProperties: false
+
+    AlarmCommandRequest:
+      type: object
+      properties:
+        action:
+          type: string
+          const: alarm
+        parameters:
+          type: object
+          properties:
+            time:
+              type: string
+              pattern: "^(?:[01]\\d|2[0-3]):[0-5]\\d$"
+              description: Android device-local time in 24-hour HH:MM format.
+            label:
+              type: string
+              maxLength: 200
+          required: [time]
+          additionalProperties: false
+      required: [action, parameters]
+      additionalProperties: false
+
+    DoNotDisturbCommandRequest:
+      type: object
+      properties:
+        action:
+          type: string
+          const: do_not_disturb
+        parameters:
+          type: object
+          properties:
+            state:
+              type: string
+              enum: [on, off]
+          required: [state]
+          additionalProperties: false
+      required: [action, parameters]
+      additionalProperties: false
+
+    BatterySaverCommandRequest:
+      type: object
+      properties:
+        action:
+          type: string
+          const: battery_saver
+        parameters:
+          type: object
+          properties:
+            state:
+              type: string
+              enum: [on, off]
+          required: [state]
+          additionalProperties: false
+      required: [action, parameters]
+      additionalProperties: false
+
+    NavigationCommandRequest:
+      type: object
+      properties:
+        action:
+          type: string
+          const: navigation
+        parameters:
+          type: object
+          properties:
+            destination:
+              type: string
+              minLength: 1
+              maxLength: 500
+            latitude:
+              type: number
+              minimum: -90
+              maximum: 90
+            longitude:
+              type: number
+              minimum: -180
+              maximum: 180
+            place_id:
+              type: string
+              minLength: 1
+              maxLength: 200
+            travel_mode:
+              type: string
+              enum: [walking, driving, cycling, electrobike]
+          required: [destination]
+          additionalProperties: false
+      required: [action, parameters]
+      additionalProperties: false
+
+    HandCreateResponse:
+      type: object
+      properties:
+        command_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          const: pending
+      required: [command_id, status]
+      additionalProperties: false
+
+    HandCommand:
+      type: object
+      properties:
+        command_id:
+          type: string
+          format: uuid
+        action:
+          type: string
+          enum:
+            - flashlight
+            - volume
+            - open_app
+            - timer
+            - alarm
+            - do_not_disturb
+            - battery_saver
+            - navigation
+        parameters:
+          type: object
+          additionalProperties: true
+        status:
+          type: string
+          enum: [pending, delivered, executed, failed, expired]
+        created_at:
+          type: string
+          format: date-time
+        delivered_at:
+          type: [string, "null"]
+          format: date-time
+        executed_at:
+          type: [string, "null"]
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+        result:
+          type: [object, "null"]
+          additionalProperties: true
+        error:
+          type: [string, "null"]
+      required:
+        - command_id
+        - action
+        - parameters
+        - status
+        - created_at
+        - delivered_at
+        - executed_at
+        - expires_at
+        - result
+        - error
+      additionalProperties: false
+

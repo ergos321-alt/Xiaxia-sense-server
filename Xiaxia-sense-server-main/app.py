@@ -10,10 +10,6 @@ from flask import Flask, request, jsonify
 from semantic import build_semantic_context
 from weather import build_weather_context
 from reality import build_reality_context
-from hand import (
-    ensure_hand_schema,
-    register_hand_routes
-)
 
 from history import (
     build_phone_history_summary,
@@ -469,10 +465,6 @@ def get_db():
             updated_at TEXT NOT NULL
         )
     """)
-
-    ensure_hand_schema(
-        conn
-    )
 
     conn.commit()
 
@@ -6517,12 +6509,6 @@ def phone_timeline_check():
 # =========================
 # 本地运行
 # =========================
-
-register_hand_routes(
-    app,
-    get_db,
-    check_token
-)
 
 if __name__ == "__main__":
     port = int(
