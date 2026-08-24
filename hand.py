@@ -1,4 +1,5 @@
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
@@ -38,6 +39,10 @@ NAVIGATION_TRAVEL_MODES = (
 )
 
 HAND_COMMAND_TTL_SECONDS = 24 * 60 * 60
+HAND_COMMAND_RETENTION_SECONDS = 7 * 24 * 60 * 60
+HAND_CLEANUP_INTERVAL_SECONDS = 10 * 60
+
+_last_hand_cleanup_epoch = 0
 
 ALARM_TIME_PATTERN = re.compile(
     r"^(?:[01]\d|2[0-3]):[0-5]\d$"
@@ -608,6 +613,8 @@ class PostgresHandStore:
 
     @staticmethod
     def _expire_stale(conn):
+        global _last_hand_cleanup_epoch
+
         conn.execute("""
             UPDATE hand_commands
             SET
@@ -619,6 +626,33 @@ class PostgresHandStore:
             WHERE status IN ('pending', 'delivered')
               AND expires_at <= CURRENT_TIMESTAMP
         """)
+
+        # Hand polling is continuous, so use it as a lightweight housekeeping
+        # heartbeat. Cleanup itself is throttled to once per 10 minutes per
+        # worker and only removes commands that have been final for 7 days.
+        now_epoch = int(time.time())
+
+        if (
+            _last_hand_cleanup_epoch
+            and now_epoch - _last_hand_cleanup_epoch
+            < HAND_CLEANUP_INTERVAL_SECONDS
+        ):
+            return
+
+        retention_cutoff = (
+            datetime.now(timezone.utc)
+            - timedelta(seconds=HAND_COMMAND_RETENTION_SECONDS)
+        )
+
+        conn.execute("""
+            DELETE FROM hand_commands
+            WHERE status IN ('executed', 'failed', 'expired')
+              AND COALESCE(executed_at, expires_at, created_at) < ?
+        """, (
+            retention_cutoff,
+        ))
+
+        _last_hand_cleanup_epoch = now_epoch
 
     def create(self, action, parameters):
         conn = self.get_db()

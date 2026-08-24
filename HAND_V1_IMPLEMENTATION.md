@@ -65,3 +65,11 @@
 - 原稳定版业务路由：无删除、无方法变更。
 - Hand V1 新增路由：4 条。
 - 真实 Supabase、Render 与 Android Tasker 未在离线工程环境中代替用户执行；部署后需按 README 做生产连接与真机验收。
+
+## Final production cleanup
+
+- Temporary `/debug/hand-routes` deployment diagnostic endpoint removed.
+- `hand_commands` final rows (`executed`, `failed`, `expired`) are retained for 7 days, then deleted automatically.
+- Hand cleanup is throttled to at most once per 10 minutes per server worker and is driven by normal Hand traffic/polling. Empty `/hand/commands/next` polls do not insert database rows.
+- `openapi.yaml` is synchronized with the Custom GPT Actions-compatible schema used in production.
+
