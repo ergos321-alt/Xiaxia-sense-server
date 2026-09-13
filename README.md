@@ -26,6 +26,7 @@
 - `SENSE_TOKEN`：既有 Bearer Token；Reality、Phone、Spatial、Hand 共用
 - `AMAP_KEY`：既有高德 Web 服务 Key
 - `PORT`：本地运行端口，可选，默认 `8000`
+- `SENSOR_FLUSH_INTERVAL_SECONDS`：SensorLogger latest state 持久化间隔，可选，默认 `60` 秒
 
 启动：
 
@@ -48,7 +49,9 @@ GET /ping
 migrations/20260824_001_create_hand_commands.sql
 ```
 
-该 migration 只新增 `hand_commands` 表和索引，不修改任何既有表。应用的 `get_db()` 也会执行同一组 `CREATE TABLE/INDEX IF NOT EXISTS`，确保新部署首次连接时可安全初始化；命令持久化于 PostgreSQL，Render 重启不会丢失。
+该 migration 只新增 `hand_commands` 表和索引，不修改任何既有表。每个服务进程的第一次数据库连接仍会执行完整的 `CREATE TABLE/INDEX IF NOT EXISTS` 初始化，确保新部署可以安全启动；同一进程后续连接不再重复执行 runtime DDL。Hand 命令仍逐次持久化于 PostgreSQL，Render 重启不会丢失。
+
+SensorLogger 的 `/data` 高频帧先合并到单进程内 latest-state cache，再按上述间隔批量持久化。Reality 读取会合并内存中的更新，因此不需要等待下一次数据库 flush；进程重启时会从 PostgreSQL fallback，最多可能丢失一个 flush 间隔内尚未持久化的 sensor latest/raw sample。当前 `Procfile` 使用 Gunicorn 默认单 worker；若以后改成多 worker/多实例，每个 worker 会拥有独立 cache，应先重新评估一致性与 Egress。
 
 ## Xiaxia Hand V1 actions
 

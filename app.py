@@ -1,5 +1,8 @@
+import atexit
 import os
 import json
+import threading
+import time
 from datetime import datetime, timezone, timedelta
 
 import psycopg
@@ -119,7 +122,26 @@ HOUSEKEEPING_INTERVAL_SECONDS = (
 SPATIAL_SAMPLE_MIN_INTERVAL_SECONDS = 60
 SPATIAL_SAMPLE_MIN_DISTANCE_M = 30
 
+# SensorLogger can push many times per second.  Keep the newest readings in
+# this process and persist one compact snapshot per interval instead of making
+# every HTTP request cross the Supabase pooler.
+SENSOR_FLUSH_INTERVAL_SECONDS = max(
+    1,
+    int(os.environ.get("SENSOR_FLUSH_INTERVAL_SECONDS", "60"))
+)
+
 _last_housekeeping_epoch = 0
+
+_schema_lock = threading.Lock()
+_schema_initialized = False
+
+_sensor_cache_lock = threading.RLock()
+_sensor_latest_cache = {}
+_sensor_dirty_names = set()
+_pending_raw_message = None
+_pending_spatial_samples = []
+_last_sensor_flush_monotonic = 0.0
+_sensor_flush_timer = None
 
 
 # =========================
@@ -342,23 +364,8 @@ class DatabaseConnection:
 # 数据库
 # =========================
 
-def get_db():
-    if not DATABASE_URL:
-        raise RuntimeError(
-            "DATABASE_URL is not configured"
-        )
-
-    raw_conn = psycopg.connect(
-        DATABASE_URL,
-        row_factory=dict_row,
-        sslmode="require",
-        connect_timeout=10
-    )
-
-    conn = DatabaseConnection(
-        raw_conn
-    )
-
+def initialize_schema(conn):
+    """Initialize the additive schema once for a newly started worker."""
     conn.execute("""
         CREATE TABLE IF NOT EXISTS messages (
             id BIGSERIAL PRIMARY KEY,
@@ -476,6 +483,37 @@ def get_db():
 
     conn.commit()
 
+
+def get_db():
+    global _schema_initialized
+
+    if not DATABASE_URL:
+        raise RuntimeError(
+            "DATABASE_URL is not configured"
+        )
+
+    raw_conn = psycopg.connect(
+        DATABASE_URL,
+        row_factory=dict_row,
+        sslmode="require",
+        connect_timeout=10
+    )
+
+    conn = DatabaseConnection(
+        raw_conn
+    )
+
+    if not _schema_initialized:
+        with _schema_lock:
+            if not _schema_initialized:
+                try:
+                    initialize_schema(conn)
+                except Exception:
+                    conn.close()
+                    raise
+
+                _schema_initialized = True
+
     return conn
 
 
@@ -584,6 +622,356 @@ def check_token():
 # Sensor 数据读取
 # =========================
 
+def _sensor_cache_is_dirty_locked():
+    return bool(
+        _sensor_dirty_names
+        or _pending_raw_message is not None
+        or _pending_spatial_samples
+    )
+
+
+def _scheduled_sensor_flush(timer):
+    global _sensor_flush_timer
+
+    with _sensor_cache_lock:
+        if _sensor_flush_timer is not timer:
+            return
+
+        _sensor_flush_timer = None
+
+        try:
+            flush_sensor_cache(force=True)
+        except Exception:
+            app.logger.exception(
+                "Scheduled sensor cache flush failed"
+            )
+            _schedule_sensor_flush_locked(
+                delay=SENSOR_FLUSH_INTERVAL_SECONDS
+            )
+
+
+def _schedule_sensor_flush_locked(delay=None):
+    global _sensor_flush_timer
+
+    if (
+        _sensor_flush_timer is not None
+        or not _sensor_cache_is_dirty_locked()
+    ):
+        return
+
+    if delay is None:
+        if _last_sensor_flush_monotonic:
+            elapsed = (
+                time.monotonic()
+                - _last_sensor_flush_monotonic
+            )
+            delay = max(
+                0.01,
+                SENSOR_FLUSH_INTERVAL_SECONDS - elapsed
+            )
+        else:
+            delay = SENSOR_FLUSH_INTERVAL_SECONDS
+
+    holder = {}
+
+    def run_scheduled_flush():
+        _scheduled_sensor_flush(holder["timer"])
+
+    timer = threading.Timer(
+        delay,
+        run_scheduled_flush
+    )
+    timer.daemon = True
+    holder["timer"] = timer
+    _sensor_flush_timer = timer
+    timer.start()
+
+
+def cache_sensor_message(
+    data,
+    received_at
+):
+    """Merge a SensorLogger frame into the process-local latest snapshot."""
+    global _pending_raw_message
+
+    message_id = data.get("messageId")
+    session_id = data.get("sessionId")
+    device_id = data.get("deviceId")
+    payload = data.get("payload", [])
+    updated_sensors = []
+
+    with _sensor_cache_lock:
+        _pending_raw_message = (
+            message_id,
+            session_id,
+            device_id,
+            received_at,
+            json.dumps(data, ensure_ascii=False)
+        )
+        _schedule_sensor_flush_locked()
+
+        if not isinstance(payload, list):
+            return updated_sensors
+
+        for reading in payload:
+            if not isinstance(reading, dict):
+                continue
+
+            sensor_name = reading.get("name")
+            sensor_time_ns = reading.get("time")
+            values = reading.get("values", {})
+
+            if (
+                not sensor_name
+                or not isinstance(sensor_time_ns, int)
+            ):
+                continue
+
+            old = _sensor_latest_cache.get(sensor_name)
+
+            if (
+                old is not None
+                and sensor_time_ns <= old["sensor_time_ns"]
+            ):
+                continue
+
+            _sensor_latest_cache[sensor_name] = {
+                "sensor_name": sensor_name,
+                "sensor_time_ns": sensor_time_ns,
+                "values": values,
+                "message_id": message_id,
+                "session_id": session_id,
+                "device_id": device_id,
+                "updated_at": received_at
+            }
+            _sensor_dirty_names.add(sensor_name)
+            updated_sensors.append(sensor_name)
+
+            if sensor_name == "location" and isinstance(values, dict):
+                latitude = values.get("latitude")
+                longitude = values.get("longitude")
+
+                if (
+                    isinstance(latitude, (int, float))
+                    and isinstance(longitude, (int, float))
+                ):
+                    _pending_spatial_samples.append({
+                        "latitude": float(latitude),
+                        "longitude": float(longitude),
+                        "accuracy_m": values.get("horizontalAccuracy"),
+                        "speed_m_s": values.get("speed"),
+                        "recorded_at": utc_now_epoch(),
+                        "received_at": received_at
+                    })
+
+    return updated_sensors
+
+
+def persist_spatial_samples(
+    conn,
+    samples
+):
+    """Apply the existing time/distance sampling rules with one read/write pair."""
+    if not samples:
+        return 0
+
+    last = conn.execute("""
+        SELECT
+            latitude,
+            longitude,
+            recorded_at
+
+        FROM spatial_history
+
+        ORDER BY recorded_at DESC
+
+        LIMIT 1
+    """).fetchone()
+
+    selected = []
+
+    for sample in samples:
+        should_insert = True
+
+        if last is not None:
+            time_gap = max(
+                0,
+                sample["recorded_at"] - last["recorded_at"]
+            )
+            distance = haversine_m(
+                last["latitude"],
+                last["longitude"],
+                sample["latitude"],
+                sample["longitude"]
+            )
+
+            if (
+                time_gap < SPATIAL_SAMPLE_MIN_INTERVAL_SECONDS
+                and isinstance(distance, (int, float))
+                and distance < SPATIAL_SAMPLE_MIN_DISTANCE_M
+            ):
+                should_insert = False
+
+        if should_insert:
+            selected.append(sample)
+            last = sample
+
+    if not selected:
+        return 0
+
+    placeholders = ", ".join(
+        "(?, ?, ?, ?, ?, ?)" for _ in selected
+    )
+    params = []
+
+    for sample in selected:
+        params.extend((
+            sample["latitude"],
+            sample["longitude"],
+            sample["accuracy_m"],
+            sample["speed_m_s"],
+            sample["recorded_at"],
+            sample["received_at"]
+        ))
+
+    conn.execute(f"""
+        INSERT INTO spatial_history (
+            latitude,
+            longitude,
+            accuracy_m,
+            speed_m_s,
+            recorded_at,
+            received_at
+        )
+        VALUES {placeholders}
+    """, tuple(params))
+
+    return len(selected)
+
+
+def flush_sensor_cache(force=False):
+    """Persist one batched snapshot when the configured interval is due."""
+    global _last_sensor_flush_monotonic
+    global _pending_raw_message
+    global _sensor_flush_timer
+
+    with _sensor_cache_lock:
+        now_monotonic = time.monotonic()
+
+        if (
+            not force
+            and _last_sensor_flush_monotonic
+            and now_monotonic - _last_sensor_flush_monotonic
+            < SENSOR_FLUSH_INTERVAL_SECONDS
+        ):
+            return False
+
+        if (
+            not _sensor_dirty_names
+            and _pending_raw_message is None
+            and not _pending_spatial_samples
+        ):
+            return False
+
+        dirty_names = sorted(_sensor_dirty_names)
+        sensor_rows = [
+            _sensor_latest_cache[name]
+            for name in dirty_names
+        ]
+        raw_message = _pending_raw_message
+        spatial_samples = list(_pending_spatial_samples)
+        conn = get_db()
+
+        try:
+            if raw_message is not None:
+                conn.execute("""
+                    INSERT INTO messages (
+                        message_id,
+                        session_id,
+                        device_id,
+                        received_at,
+                        raw_json
+                    )
+                    VALUES (?, ?, ?, ?, ?)
+                """, raw_message)
+
+            if sensor_rows:
+                placeholders = ", ".join(
+                    "(?, ?, ?, ?, ?, ?, ?)"
+                    for _ in sensor_rows
+                )
+                params = []
+
+                for row in sensor_rows:
+                    params.extend((
+                        row["sensor_name"],
+                        row["sensor_time_ns"],
+                        json.dumps(row["values"], ensure_ascii=False),
+                        row["message_id"],
+                        row["session_id"],
+                        row["device_id"],
+                        row["updated_at"]
+                    ))
+
+                conn.execute(f"""
+                    INSERT INTO sensor_latest (
+                        sensor_name,
+                        sensor_time_ns,
+                        values_json,
+                        message_id,
+                        session_id,
+                        device_id,
+                        updated_at
+                    )
+                    VALUES {placeholders}
+                    ON CONFLICT(sensor_name)
+                    DO UPDATE SET
+                        sensor_time_ns = excluded.sensor_time_ns,
+                        values_json = excluded.values_json,
+                        message_id = excluded.message_id,
+                        session_id = excluded.session_id,
+                        device_id = excluded.device_id,
+                        updated_at = excluded.updated_at
+                    WHERE excluded.sensor_time_ns
+                        > sensor_latest.sensor_time_ns
+                """, tuple(params))
+
+            persist_spatial_samples(
+                conn,
+                spatial_samples
+            )
+            run_housekeeping(conn)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+        _sensor_dirty_names.difference_update(dirty_names)
+        _pending_raw_message = None
+        _pending_spatial_samples.clear()
+        _last_sensor_flush_monotonic = now_monotonic
+
+        if _sensor_flush_timer is not None:
+            _sensor_flush_timer.cancel()
+            _sensor_flush_timer = None
+
+    return True
+
+
+def _flush_sensor_cache_at_exit():
+    try:
+        flush_sensor_cache(force=True)
+    except Exception:
+        # Process termination is best-effort; the previous periodic snapshot
+        # remains the durable fallback if the database is unavailable.
+        pass
+
+
+atexit.register(_flush_sensor_cache_at_exit)
+
+
 def load_latest_sensors():
     conn = get_db()
 
@@ -657,6 +1045,33 @@ def load_latest_sensors():
                     "freshness"
                 ]
             )
+        }
+
+    with _sensor_cache_lock:
+        cached_rows = list(
+            _sensor_latest_cache.values()
+        )
+
+    for row in cached_rows:
+        sensor_name = row["sensor_name"]
+        durable = sensors.get(sensor_name)
+
+        if (
+            durable is not None
+            and row["sensor_time_ns"] <= durable["time_ns"]
+        ):
+            continue
+
+        freshness = freshness_info(
+            sensor_name,
+            row["updated_at"]
+        )
+        sensors[sensor_name] = {
+            "time_ns": row["sensor_time_ns"],
+            "values": row["values"],
+            "updated_at": row["updated_at"],
+            "age_seconds": freshness["age_seconds"],
+            "freshness": freshness["freshness"]
         }
 
     return sensors
@@ -3424,24 +3839,6 @@ def receive_data():
             "error": "invalid_json"
         }), 400
 
-    message_id = (
-        data.get(
-            "messageId"
-        )
-    )
-
-    session_id = (
-        data.get(
-            "sessionId"
-        )
-    )
-
-    device_id = (
-        data.get(
-            "deviceId"
-        )
-    )
-
     payload = (
         data.get(
             "payload",
@@ -3453,233 +3850,12 @@ def receive_data():
         utc_now_iso()
     )
 
-    conn = get_db()
-
-    conn.execute("""
-        INSERT INTO messages (
-            message_id,
-            session_id,
-            device_id,
-            received_at,
-            raw_json
-        )
-
-        VALUES (?, ?, ?, ?, ?)
-    """, (
-        message_id,
-        session_id,
-        device_id,
-        received_at,
-        json.dumps(
-            data,
-            ensure_ascii=False
-        )
-    ))
-
-    updated_sensors = []
-    location_sample = None
-
-    if isinstance(
-        payload,
-        list
-    ):
-        for reading in payload:
-            if not isinstance(
-                reading,
-                dict
-            ):
-                continue
-
-            sensor_name = (
-                reading.get(
-                    "name"
-                )
-            )
-
-            sensor_time_ns = (
-                reading.get(
-                    "time"
-                )
-            )
-
-            values = (
-                reading.get(
-                    "values",
-                    {}
-                )
-            )
-
-            if not sensor_name:
-                continue
-
-            if not isinstance(
-                sensor_time_ns,
-                int
-            ):
-                continue
-
-            old = conn.execute("""
-                SELECT sensor_time_ns
-
-                FROM sensor_latest
-
-                WHERE sensor_name = ?
-            """, (
-                sensor_name,
-            )).fetchone()
-
-            if (
-                old is None
-                or sensor_time_ns
-                > old[
-                    "sensor_time_ns"
-                ]
-            ):
-                conn.execute("""
-                    INSERT INTO sensor_latest (
-                        sensor_name,
-                        sensor_time_ns,
-                        values_json,
-                        message_id,
-                        session_id,
-                        device_id,
-                        updated_at
-                    )
-
-                    VALUES (
-                        ?, ?, ?, ?, ?, ?, ?
-                    )
-
-                    ON CONFLICT(sensor_name)
-
-                    DO UPDATE SET
-                        sensor_time_ns =
-                            excluded.sensor_time_ns,
-
-                        values_json =
-                            excluded.values_json,
-
-                        message_id =
-                            excluded.message_id,
-
-                        session_id =
-                            excluded.session_id,
-
-                        device_id =
-                            excluded.device_id,
-
-                        updated_at =
-                            excluded.updated_at
-                """, (
-                    sensor_name,
-                    sensor_time_ns,
-
-                    json.dumps(
-                        values,
-                        ensure_ascii=False
-                    ),
-
-                    message_id,
-                    session_id,
-                    device_id,
-                    received_at
-                ))
-
-                updated_sensors.append(
-                    sensor_name
-                )
-
-                if (
-                    sensor_name
-                    == "location"
-                    and isinstance(
-                        values,
-                        dict
-                    )
-                ):
-                    latitude = (
-                        values.get(
-                            "latitude"
-                        )
-                    )
-
-                    longitude = (
-                        values.get(
-                            "longitude"
-                        )
-                    )
-
-                    if (
-                        isinstance(
-                            latitude,
-                            (int, float)
-                        )
-                        and isinstance(
-                            longitude,
-                            (int, float)
-                        )
-                    ):
-                        location_sample = {
-                            "latitude": (
-                                float(
-                                    latitude
-                                )
-                            ),
-
-                            "longitude": (
-                                float(
-                                    longitude
-                                )
-                            ),
-
-                            "accuracy_m": (
-                                values.get(
-                                    "horizontalAccuracy"
-                                )
-                            ),
-
-                            "speed_m_s": (
-                                values.get(
-                                    "speed"
-                                )
-                            )
-                        }
-
-    if location_sample:
-        record_spatial_sample(
-            conn,
-
-            location_sample[
-                "latitude"
-            ],
-
-            location_sample[
-                "longitude"
-            ],
-
-            accuracy_m=(
-                location_sample.get(
-                    "accuracy_m"
-                )
-            ),
-
-            speed_m_s=(
-                location_sample.get(
-                    "speed_m_s"
-                )
-            ),
-
-            received_at=(
-                received_at
-            )
-        )
-
-    run_housekeeping(
-        conn
+    updated_sensors = cache_sensor_message(
+        data,
+        received_at
     )
 
-    conn.commit()
-    conn.close()
+    flush_sensor_cache()
 
     return jsonify({
         "status": "ok",
