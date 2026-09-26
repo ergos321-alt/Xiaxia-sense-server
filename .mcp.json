@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "xiaxia_reality_health": {
+      "type": "http",
+      "url": "https://xiaxia-sense-server.onrender.com/mcp"
+    }
+  }
+}
