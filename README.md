@@ -1,6 +1,6 @@
 # Xiaxia Reality Server + Xiaxia Hand V1
 
-林知夏的 Reality Sense 服务端。当前稳定能力保持不变，并增量加入 Xiaxia Hand V1：Custom GPT 创建语义化手机动作，服务端持久化并管理状态，Tasker 轮询领取后在 Android 端执行，再把结果回传服务端。
+林知夏的 Reality Sense 服务端。当前 ChatGPT 入口为普通 ChatGPT → Xiaxia Plugin → MCP → 本服务。既有 Reality 能力保持不变，并增量加入 Xiaxia Hand V1：服务端持久化并管理语义化手机动作，Tasker 轮询领取后在 Android 端执行，再把结果回传服务端。
 
 服务端不会直接控制手机；Tasker 是唯一执行端。
 
@@ -12,7 +12,7 @@
 - GPS / Location、Amap Reverse Geocode、Nearby POI
 - Spatial Reality、Personal Places、Route
 - Supabase PostgreSQL 持久化
-- Custom GPT Actions
+- Legacy Custom GPT Actions (compatibility only; current entry point uses Plugin → MCP)
 
 ## Runtime
 
@@ -217,7 +217,9 @@ pending/delivered -> expired
 
 具体 JSON 变量语法会随 Tasker 版本和结构化输出设置不同，请以真机版本为准。本项目不生成复杂 Tasker XML。
 
-## Custom GPT Action schema
+## Legacy Custom GPT Action schema
+
+This section documents the historical Custom GPT integration. The current ChatGPT entry point is Plugin → MCP; the REST routes remain available to existing clients.
 
 Action Schema 位于 `openapi.yaml`，保留 Reality、Phone、Spatial 的已有读取/管理接口并新增 Hand 接口。所有 operationId 唯一，Hand 的 `action` 和参数均设置白名单/enum；不存在 `execute_anything` 或 `run_tasker_command`。
 
